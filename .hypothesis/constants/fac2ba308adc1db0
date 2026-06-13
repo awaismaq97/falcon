@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon\config.py
+# hypothesis_version: 6.148.9
+
+['.env', 'GROQ_API_KEY', 'available_models', 'config.yaml', 'default_model', 'log_dir', 'r', 'utf-8']

@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon\identity.py
+# hypothesis_version: 6.148.9
+
+['\x00', '*.json', '..', '/', '\\', 'logs', 'null byte', 'r', 'utf-8']

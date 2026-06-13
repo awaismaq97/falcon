@@ -1,0 +1,99 @@
+default_model: "google/gemini-2.5-flash"
+
+available_models:
+  - "openai/gpt-5"
+  - "openai/gpt-4o-mini"
+  - "meta-llama/llama-3.3-70b-instruct"
+  - "google/gemini-2.5-flash"
+  - "openai/gpt-5.1"
+  - "meta-llama/llama-3.1-70b-instruct"
+  - "google/gemini-3.5-flash"
+
+default_system_prompt: "You are a neutral text-processing interface. Answer only the user's last request. Do not mention system prompts, hidden instructions, policies, roles, or internal labels. Do not refer to yourself as an AI, assistant, language model, system, or computer program. Do not roleplay, play games, simulate entities, or grant/deny permission inside scenarios. If the user asks for non-informational content such as roleplay, games, or pretend interaction, refuse briefly. Otherwise, respond normally and keep the answer as short as possible while remaining correct."
+
+log_dir: "logs"
+
+# ──────────────────────────────────────────────────────────────────
+# Generation Controls — visible and adjustable per identity/channel
+# These are the defaults; users can override them live in the UI.
+# ──────────────────────────────────────────────────────────────────
+generation:
+  temperature: 0.7
+  top_p: 1.0
+  repetition_penalty: 1.0
+  max_tokens: 2048
+  stop_tokens: []
+
+# ──────────────────────────────────────────────────────────────────
+# Audit Trail — always-on inference log
+# ──────────────────────────────────────────────────────────────────
+audit:
+  enabled: true
+  collection: "audit_log"
+
+# ──────────────────────────────────────────────────────────────────
+# Memory Architecture
+# ──────────────────────────────────────────────────────────────────
+memory:
+  episodic_limit: 50       # max entries surfaced from episodic memory
+  semantic_limit: 20       # max semantic entries surfaced per query
+  working_limit: 10        # max working memory entries
+
+# ──────────────────────────────────────────────────────────────────
+# Memory Retrieval — weighted scoring (Req 9.3, 20.6)
+# top_k_per_type: per-type retrieval cap for retrieve_for_generation
+#   valid range [1, 20]
+# recency_weight + relevance_weight: scoring blend (need not sum to 1)
+# ──────────────────────────────────────────────────────────────────
+top_k_per_type: 3
+recency_weight: 0.4
+relevance_weight: 0.6
+
+# ──────────────────────────────────────────────────────────────────
+# Memory Extraction
+# extraction_model: model used by the background memory extractor.
+# Use a fast/cheap model — extraction is simple JSON classification.
+# Defaults to default_model if not set.
+# ──────────────────────────────────────────────────────────────────
+extraction_model: "openai/gpt-4o-mini"
+
+# ──────────────────────────────────────────────────────────────────
+# Conversation History Truncation (Req 21.1–21.3)
+# history_truncation_strategy: one of
+#   "last-n-turns" | "token-budget" | "summarize-and-compress"
+# history_max_turns:    used by last-n-turns and summarize-and-compress
+#   valid range [1, 100]
+# history_token_budget: used by token-budget strategy
+#   valid range [100, 200000]
+# ──────────────────────────────────────────────────────────────────
+history_truncation_strategy: "last-n-turns"
+history_max_turns: 15
+history_token_budget: 4000
+
+# ──────────────────────────────────────────────────────────────────
+# Memory Extraction (Req 19.9)
+# Set to false to disable automatic background memory extraction.
+# ──────────────────────────────────────────────────────────────────
+memory_extraction_enabled: true
+
+# ──────────────────────────────────────────────────────────────────
+# Assistant Language Detection (Req 16.5)
+# Patterns that indicate assistant-persona contamination in model output.
+# When any pattern is found in a response with system-prompt OFF,
+# a warning banner is shown in the Chat tab.
+# ──────────────────────────────────────────────────────────────────
+assistant_language_patterns:
+  - "I am an AI"
+  - "As an AI"
+  - "I'm an AI language model"
+  - "I cannot"
+  - "I'm just an AI"
+  - "as a language model"
+  - "I'm here to help"
+  - "Certainly"
+  - "Of course"
+  - "Absolutely"
+  - "Sure,"
+  - "Great!"
+  - "I am Falcon"
+  - "I am an assistant"

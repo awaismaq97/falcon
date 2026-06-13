@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon\engine.py
+# hypothesis_version: 6.148.9
+
+['assistant', 'content', 'id', 'raw_payload', 'response', 'response_metadata', 'role', 'system', 'token_usage', 'usage', 'user']

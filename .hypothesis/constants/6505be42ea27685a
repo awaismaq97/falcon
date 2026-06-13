@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon memory-2\falcon\memory.py
+# hypothesis_version: 6.155.1
+
+[0.0, 0.4, 0.6, 1.0, 100, '$set', '%Y-%m-%dT%H:%M:%SZ', '?', '_id', 'archive', 'by_type', 'content', 'created_at', 'entries', 'episodic', 'identity_id', 'keyword-match', 'match_reason', 'memory', 'memory_type', 'persona', 'pinned', 'procedural', 'reasoning', 'recency', 'retrieved_count', 'score', 'semantic', 'source', 'tag-match', 'tags', 'total_found', 'updated_at', 'user', 'working']

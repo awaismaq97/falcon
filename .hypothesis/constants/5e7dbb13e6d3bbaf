@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon memory-2\falcon\engine.py
+# hypothesis_version: 6.155.1
+
+[0.5, 0.7, 1.0, 1000, 2048, 4000, '</think>', '<think>', 'Authorization', 'Falcon', 'HTTP-Referer', 'X-Title', '[no output]', '_StreamResult', 'annotated_payload', 'assembled_payload', 'assistant', 'completion_tokens', 'content', 'conversation_history', 'current_input', 'documents', 'empty', 'entries', 'extra_body', 'history', 'history-summary', 'history_included', 'include_usage', 'last-n-turns', 'max_tokens', 'memory', 'memory_entries', 'memory_type', 'message_count', 'messages', 'model', 'persona', 'persona_block', 'present', 'prompt_state', 'prompt_tokens', 'repetition_penalty', 'retrieval_result', 'retrieval_timeout', 'retrieved_memory', 'role', 'source', 'stop', 'stream', 'stream_options', 'system', 'system-prompt', 'system_prompt', 'temperature', 'token-budget', 'top_p', 'total_tokens', 'truncation_strategy', 'user', 'user-input']

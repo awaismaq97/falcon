@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon memory-2\falcon\memory_extractor.py
+# hypothesis_version: 6.155.1
+
+[0.1, 1024, 2000, 10000, 'Authorization', 'HTTP-Referer', 'X-Title', '```', 'assistant_message', 'auto', 'content', 'episodic', 'identity_id', 'memory_type', 'procedural', 'role', 'semantic', 'tags', 'turn_index', 'user', 'user_message', 'working']
