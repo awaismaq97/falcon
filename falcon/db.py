@@ -57,12 +57,6 @@ def _make_db() -> Database:
         serverSelectionTimeoutMS=5000,
         connectTimeoutMS=5000,
         socketTimeoutMS=10000,
-        # Explicit TLS settings — required on Python 3.14+ where OpenSSL
-        # enforces stricter defaults that cause TLSV1_ALERT_INTERNAL_ERROR
-        # against MongoDB Atlas on Streamlit Cloud.
-        tls=True,
-        tlsAllowInvalidCertificates=False,
-        tlsAllowInvalidHostnames=False,
     )
     db = client["falcon"]
     # Ensure indexes exist (no-op if already present)
