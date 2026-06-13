@@ -947,34 +947,63 @@ def _render_memory_tab() -> None:
     persona_entries = Memory.get_memories(identity_id, memory_type="persona", limit=1)
     persona = persona_entries[0] if persona_entries else None
 
-    # Parse persona content string into individual fields for display.
-    # Content is stored as "Name: ...\nTone: ...\nCommunication style: ...\nCore traits: ..."
-    def _parse_persona(p: dict | None) -> tuple[str, str, str, str]:
-        if not p:
-            return "", "", "", ""
-        raw = p.get("content", "")
-        fields: dict[str, str] = {}
+    # Parse "Name: ...\nTone: ...\nCommunication style: ...\nCore traits: ..."
+    # Handles multi-line values — everything after a "Key:" header up until
+    # the next known header belongs to that field.
+    def _parse_persona(raw: str) -> tuple[str, str, str, str]:
+        # Known keys in order — used to detect where a new field starts.
+        _KEYS = ["name", "tone", "communication style", "core traits"]
+
+        fields: dict[str, list[str]] = {k: [] for k in _KEYS}
+        current_key: str | None = None
+
         for line in raw.splitlines():
-            if ":" in line:
-                key, _, val = line.partition(":")
-                fields[key.strip().lower()] = val.strip()
+            # Check if this line starts a known key (case-insensitive)
+            matched = None
+            for k in _KEYS:
+                if line.lower().startswith(k + ":"):
+                    matched = k
+                    break
+            if matched is not None:
+                current_key = matched
+                # The rest of this line after "Key:" is the first value line
+                first_val = line[len(matched) + 1:].strip()
+                if first_val:
+                    fields[current_key].append(first_val)
+            elif current_key is not None:
+                # Continuation line — belongs to the current field
+                fields[current_key].append(line)
+
+        # Join multi-line values; strip trailing blank lines
+        def _join(lines: list[str]) -> str:
+            return "\n".join(lines).strip()
+
         return (
-            fields.get("name", ""),
-            fields.get("tone", ""),
-            fields.get("communication style", ""),
-            fields.get("core traits", ""),
+            _join(fields["name"]),
+            _join(fields["tone"]),
+            _join(fields["communication style"]),
+            _join(fields["core traits"]),
         )
 
-    _p_name_val, _p_tone_val, _p_style_val, _p_traits_val = _parse_persona(persona)
+    if persona:
+        # Persona exists in DB — parse it
+        _p_name_val, _p_tone_val, _p_style_val, _p_traits_val = _parse_persona(
+            persona.get("content", "")
+        )
+    else:
+        # No persona in DB yet — pre-fill from config.yaml
+        _p_name_val, _p_tone_val, _p_style_val, _p_traits_val = _parse_persona(
+            Config.default_persona_startup_content
+        )
 
     with st.expander("Edit Persona", expanded=not bool(persona)):
         if not persona:
-            st.caption("_No persona defined. Fill in the fields below to create one._")
+            st.caption("_No persona saved yet — fields pre-filled from config.yaml defaults._")
 
-        p_name  = st.text_input("Name",               value=_p_name_val,   key="_p_name")
-        p_tone  = st.text_input("Tone",               value=_p_tone_val,   key="_p_tone")
+        p_name  = st.text_input("Name",                value=_p_name_val,   key="_p_name")
+        p_tone  = st.text_input("Tone",                value=_p_tone_val,   key="_p_tone")
         p_style = st.text_input("Communication style", value=_p_style_val,  key="_p_style")
-        p_traits= st.text_input("Core traits",        value=_p_traits_val, key="_p_traits")
+        p_traits= st.text_area("Core traits",          value=_p_traits_val, key="_p_traits", height=180)
 
         if st.button("Save Persona", key="_p_save"):
             persona_content = (
@@ -984,7 +1013,6 @@ def _render_memory_tab() -> None:
             try:
                 if persona:
                     Memory.update_memory(persona["_id"], content=persona_content)
-                    # Also update the extra fields if stored flat
                 else:
                     Memory.add_memory(
                         identity_id=identity_id,
@@ -1709,6 +1737,39 @@ def main() -> None:
     if not st.session_state._loaded_initial_history:
         _load_identity_history(st.session_state.identity_id)
         _restore_token_totals(st.session_state.identity_id)
+
+        # ── Sync default persona from config.yaml on every startup ──────────
+        # Always upserts — so editing config.yaml and restarting the app
+        # immediately takes effect for the designated identity.
+        # Other identities are NOT touched here (they get the YAML persona
+        # only at creation time, and can be edited freely afterward).
+        if Config.default_persona_startup_content:
+            _dp_identity = Config.default_persona_identity or "default"
+            from datetime import datetime, timezone as _tz
+            _now = datetime.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Ensure identity registry entry exists
+            Identity.create_identity(_dp_identity)
+            _existing_persona = get_db()["memory"].find_one({
+                "identity_id": _dp_identity,
+                "memory_type": "persona",
+            })
+            if _existing_persona:
+                # Overwrite with latest config.yaml values
+                get_db()["memory"].update_one(
+                    {"_id": _existing_persona["_id"]},
+                    {"$set": {
+                        "content":    Config.default_persona_startup_content,
+                        "updated_at": _now,
+                    }},
+                )
+            else:
+                Memory.add_memory(
+                    identity_id=_dp_identity,
+                    memory_type="persona",
+                    content=Config.default_persona_startup_content,
+                    source="user",
+                )
+
         st.session_state._loaded_initial_history = True
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
@@ -1789,7 +1850,7 @@ def main() -> None:
                 Memory.add_memory(
                     identity_id=new_id,
                     memory_type="persona",
-                    content=Config.default_persona_content,
+                    content=Config.default_persona_startup_content,
                     source="user",
                 )
                 st.session_state.identity_id    = new_id
