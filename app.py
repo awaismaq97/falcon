@@ -1677,6 +1677,32 @@ def main() -> None:
         font-size: 0.72rem; color: #64748b; margin-bottom: 2px;
         font-family: monospace; letter-spacing: 0.04em;
     }
+
+    /* Tooltip question-mark badge next to each control label */
+    .param-hint {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 13px; height: 13px;
+        border-radius: 50%;
+        background: #334155;
+        color: #94a3b8;
+        font-size: 0.6rem;
+        font-family: sans-serif;
+        font-weight: 700;
+        cursor: default;
+        vertical-align: middle;
+        margin-left: 4px;
+        user-select: none;
+        border: 1px solid #475569;
+        position: relative;
+        top: -1px;
+    }
+    .param-hint:hover {
+        background: #ef4444;
+        color: #fff;
+        border-color: #ef4444;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -1839,28 +1865,48 @@ def main() -> None:
         # ── Generation Controls ───────────────────────────────────────────────
         st.markdown('<div class="sidebar-section-label">Generation Controls</div>', unsafe_allow_html=True)
 
-        st.markdown('<div class="gen-control-label">temperature</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="gen-control-label">temperature'
+            ' <span class="param-hint" title="Controls randomness. Lower values (e.g. 0.2) make output more focused and deterministic; higher values (e.g. 1.5) make it more creative and unpredictable.">&#x3F;</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         st.session_state.gen_temperature = st.slider(
             "temperature", min_value=0.0, max_value=2.0,
             value=float(st.session_state.gen_temperature), step=0.05,
             label_visibility="collapsed", key="_slider_temp",
         )
 
-        st.markdown('<div class="gen-control-label">top_p</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="gen-control-label">top_p'
+            ' <span class="param-hint" title="Nucleus sampling threshold. Only the most probable tokens whose cumulative probability reaches top_p are considered. 1.0 = all tokens; lower values (e.g. 0.9) cut off unlikely words.">&#x3F;</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         st.session_state.gen_top_p = st.slider(
             "top_p", min_value=0.0, max_value=1.0,
             value=float(st.session_state.gen_top_p), step=0.05,
             label_visibility="collapsed", key="_slider_top_p",
         )
 
-        st.markdown('<div class="gen-control-label">repetition_penalty</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="gen-control-label">repetition_penalty'
+            ' <span class="param-hint" title="Penalises tokens that have already appeared, reducing repetition. 1.0 = no penalty; higher values (e.g. 1.3) strongly discourage the model from repeating itself.">&#x3F;</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         st.session_state.gen_repetition_penalty = st.slider(
             "repetition_penalty", min_value=1.0, max_value=2.0,
             value=float(st.session_state.gen_repetition_penalty), step=0.05,
             label_visibility="collapsed", key="_slider_rep",
         )
 
-        st.markdown('<div class="gen-control-label">stop_tokens</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="gen-control-label">stop_tokens'
+            ' <span class="param-hint" title="One or more strings that will immediately end generation when the model produces them. Enter as a comma-separated list, e.g. &lt;|end|&gt;, ###">&#x3F;</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         stop_raw = st.text_input(
             "stop_tokens", placeholder="comma-separated, e.g. <|end|>, ###",
             value=", ".join(st.session_state.gen_stop_tokens or []),
