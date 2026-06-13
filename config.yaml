@@ -1,4 +1,4 @@
-default_model: "qwen/qwen3-235b-a22b-2507"
+default_model: "meta-llama/llama-3.3-70b-instruct"
 
 available_models:
   - "qwen/qwen-2.5-72b-instruct"
