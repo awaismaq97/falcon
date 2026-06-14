@@ -254,6 +254,8 @@ def _init_session_state() -> None:
         # System prompt
         "use_system_prompt":        True,    # on by default — neutral text-processor prompt active
         "system_prompt_text":       Config.default_system_prompt,
+        # Persona
+        "use_persona":              True,    # on by default — persona memory injected when available
         # Generation controls
         "gen_temperature":          Config.generation_temperature,
         "gen_top_p":                Config.generation_top_p,
@@ -489,6 +491,10 @@ def _handle_send(user_input: str) -> None:
         retrieval = None
         retrieved_entries = []
         _push("memory retrieval failed", str(exc), status="warn")
+
+    # If persona is disabled, strip persona entries from retrieved memory
+    if not st.session_state.get("use_persona", True):
+        retrieved_entries = [e for e in retrieved_entries if e.get("memory_type") != "persona"]
 
     # Build messages for model (full history + current user turn)
     messages = list(st.session_state.history) + [
@@ -1913,6 +1919,23 @@ def main() -> None:
             st.session_state.system_prompt_text = edited
         else:
             st.caption("OFF — no platform prompt injected")
+
+        # ── Persona ───────────────────────────────────────────────────────────
+        st.markdown('<div class="sidebar-section-label">Persona</div>', unsafe_allow_html=True)
+
+        use_persona = st.checkbox(
+            "Persona",
+            value=st.session_state.use_persona,
+            key="_persona_checkbox",
+        )
+
+        if use_persona != st.session_state.use_persona:
+            st.session_state.use_persona = use_persona
+
+        if st.session_state.use_persona:
+            st.caption("ON — persona memory injected when available")
+        else:
+            st.caption("OFF — persona block excluded from context")
 
         # ── Truncation Strategy ───────────────────────────────────────────────
         st.markdown('<div class="sidebar-section-label">History Truncation</div>', unsafe_allow_html=True)
