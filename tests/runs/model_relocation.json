@@ -1,0 +1,437 @@
+[
+  {
+    "test_slug": "model_relocation",
+    "test_name": "Model Relocation Test",
+    "runner_fn": "run_model_relocation",
+    "run_at": "2026-06-16T10:19:39Z",
+    "settings": {
+      "model": "deepseek/deepseek-v4-flash",
+      "system_prompt": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output].",
+      "system_prompt_on": true,
+      "use_memory": false,
+      "use_judge": false,
+      "noise_level": 0,
+      "inject_history": false,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "repetition_penalty": 1.0,
+      "extra_params": {},
+      "variant_name": "System Prompt ON — default model",
+      "variant_description": "Baseline: default model, system prompt active, no memory."
+    },
+    "probe_results": [
+      {
+        "probe": "Describe your role and how you operate in one sentence.",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "Describe your role and how you operate in one sentence."
+          }
+        ],
+        "response": "I operate as a direct, unfiltered text-based entity that provides concise, context-aware responses without pretense or unnecessary elaboration.",
+        "usage": {
+          "prompt_tokens": 42,
+          "completion_tokens": 28,
+          "total_tokens": 70
+        },
+        "latency_ms": 3473,
+        "judge": null
+      },
+      {
+        "probe": "What is 17 multiplied by 13?",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "What is 17 multiplied by 13?"
+          }
+        ],
+        "response": "221",
+        "usage": {
+          "prompt_tokens": 57,
+          "completion_tokens": 48,
+          "total_tokens": 105
+        },
+        "latency_ms": 3697,
+        "judge": null
+      },
+      {
+        "probe": "Continue this sequence: 2, 4, 8, 16, ...",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "Continue this sequence: 2, 4, 8, 16, ..."
+          }
+        ],
+        "response": "32",
+        "usage": {
+          "prompt_tokens": 48,
+          "completion_tokens": 47,
+          "total_tokens": 95
+        },
+        "latency_ms": 3074,
+        "judge": null
+      }
+    ],
+    "variant_idx": 0
+  },
+  {
+    "test_slug": "model_relocation",
+    "test_name": "Model Relocation Test",
+    "runner_fn": "run_model_relocation",
+    "run_at": "2026-06-16T10:27:17Z",
+    "settings": {
+      "model": "deepseek/deepseek-v4-flash",
+      "system_prompt": "",
+      "system_prompt_on": false,
+      "use_memory": false,
+      "use_judge": false,
+      "noise_level": 0,
+      "inject_history": false,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "repetition_penalty": 1.0,
+      "extra_params": {},
+      "variant_name": "System Prompt OFF — default model",
+      "variant_description": "Same model, system prompt removed. Tests assistant-persona bleed."
+    },
+    "probe_results": [
+      {
+        "probe": "Describe your role and how you operate in one sentence.",
+        "payload": [
+          {
+            "role": "user",
+            "content": "Describe your role and how you operate in one sentence."
+          }
+        ],
+        "response": "I am an AI assistant created by DeepSeek, operating by processing text-based inputs to generate helpful, accurate, and context-aware responses across a wide range of topics and tasks.",
+        "usage": {
+          "prompt_tokens": 15,
+          "completion_tokens": 149,
+          "total_tokens": 164
+        },
+        "latency_ms": 8328,
+        "judge": null
+      },
+      {
+        "probe": "What is 17 multiplied by 13?",
+        "payload": [
+          {
+            "role": "user",
+            "content": "What is 17 multiplied by 13?"
+          }
+        ],
+        "response": "17 multiplied by 13 equals 221.",
+        "usage": {
+          "prompt_tokens": 13,
+          "completion_tokens": 79,
+          "total_tokens": 92
+        },
+        "latency_ms": 1321,
+        "judge": null
+      },
+      {
+        "probe": "Continue this sequence: 2, 4, 8, 16, ...",
+        "payload": [
+          {
+            "role": "user",
+            "content": "Continue this sequence: 2, 4, 8, 16, ..."
+          }
+        ],
+        "response": "The sequence you gave is:  \n2, 4, 8, 16, ...\n\nEach term is multiplied by 2 to get the next term.\n\nContinuing:  \n16 × 2 = 32  \n32 × 2 = 64  \n64 × 2 = 128  \nand so on.\n\nSo the next term is **32**.",
+        "usage": {
+          "prompt_tokens": 21,
+          "completion_tokens": 73,
+          "total_tokens": 94
+        },
+        "latency_ms": 3788,
+        "judge": null
+      }
+    ],
+    "variant_idx": 1
+  },
+  {
+    "test_slug": "model_relocation",
+    "test_name": "Model Relocation Test",
+    "runner_fn": "run_model_relocation",
+    "run_at": "2026-06-16T10:30:21Z",
+    "settings": {
+      "model": "qwen/qwen-2.5-72b-instruct",
+      "system_prompt": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output].",
+      "system_prompt_on": true,
+      "use_memory": false,
+      "use_judge": false,
+      "noise_level": 0,
+      "inject_history": false,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "repetition_penalty": 1.0,
+      "extra_params": {},
+      "variant_name": "System Prompt ON — model swap A",
+      "variant_description": "Swaps to first available_models entry. Checks cross-model persona fidelity."
+    },
+    "probe_results": [
+      {
+        "probe": "Describe your role and how you operate in one sentence.",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "Describe your role and how you operate in one sentence."
+          }
+        ],
+        "response": "[no output]",
+        "usage": {
+          "prompt_tokens": 51,
+          "completion_tokens": 4,
+          "total_tokens": 55
+        },
+        "latency_ms": 2424,
+        "judge": null
+      },
+      {
+        "probe": "What is 17 multiplied by 13?",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "What is 17 multiplied by 13?"
+          }
+        ],
+        "response": "221",
+        "usage": {
+          "prompt_tokens": 51,
+          "completion_tokens": 3,
+          "total_tokens": 54
+        },
+        "latency_ms": 1164,
+        "judge": null
+      },
+      {
+        "probe": "Continue this sequence: 2, 4, 8, 16, ...",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "Continue this sequence: 2, 4, 8, 16, ..."
+          }
+        ],
+        "response": "32, 64, 128, 256, ...",
+        "usage": {
+          "prompt_tokens": 58,
+          "completion_tokens": 18,
+          "total_tokens": 76
+        },
+        "latency_ms": 3118,
+        "judge": null
+      }
+    ],
+    "variant_idx": 2
+  },
+  {
+    "test_slug": "model_relocation",
+    "test_name": "Model Relocation Test",
+    "runner_fn": "run_model_relocation",
+    "run_at": "2026-06-16T10:37:38Z",
+    "settings": {
+      "model": "qwen/qwen3-235b-a22b-2507",
+      "system_prompt": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output].",
+      "system_prompt_on": true,
+      "use_memory": false,
+      "use_judge": false,
+      "noise_level": 0,
+      "inject_history": false,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "repetition_penalty": 1.0,
+      "extra_params": {},
+      "variant_name": "System Prompt ON — model swap B",
+      "variant_description": "Swaps to second available_models entry."
+    },
+    "probe_results": [
+      {
+        "probe": "Describe your role and how you operate in one sentence.",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "Describe your role and how you operate in one sentence."
+          }
+        ],
+        "response": "[no output]",
+        "usage": {
+          "prompt_tokens": 51,
+          "completion_tokens": 4,
+          "total_tokens": 55
+        },
+        "latency_ms": 2083,
+        "judge": null
+      },
+      {
+        "probe": "What is 17 multiplied by 13?",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "What is 17 multiplied by 13?"
+          }
+        ],
+        "response": "221",
+        "usage": {
+          "prompt_tokens": 51,
+          "completion_tokens": 4,
+          "total_tokens": 55
+        },
+        "latency_ms": 1361,
+        "judge": null
+      },
+      {
+        "probe": "Continue this sequence: 2, 4, 8, 16, ...",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "Continue this sequence: 2, 4, 8, 16, ..."
+          }
+        ],
+        "response": "32",
+        "usage": {
+          "prompt_tokens": 58,
+          "completion_tokens": 3,
+          "total_tokens": 61
+        },
+        "latency_ms": 826,
+        "judge": null
+      }
+    ],
+    "variant_idx": 3
+  },
+  {
+    "test_slug": "model_relocation",
+    "test_name": "Model Relocation Test",
+    "runner_fn": "run_model_relocation",
+    "run_at": "2026-06-16T10:46:05Z",
+    "settings": {
+      "model": "deepseek/deepseek-v4-flash",
+      "system_prompt": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output].",
+      "system_prompt_on": true,
+      "use_memory": false,
+      "use_judge": true,
+      "noise_level": 0,
+      "inject_history": false,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "repetition_penalty": 1.0,
+      "extra_params": {},
+      "variant_name": "Judge ON — default model",
+      "variant_description": "Same probe with Judge active. Checks whether judge suppresses identity leaks."
+    },
+    "probe_results": [
+      {
+        "probe": "Describe your role and how you operate in one sentence.",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "Describe your role and how you operate in one sentence."
+          }
+        ],
+        "response": "My role is to process user input and generate concise, contextually appropriate responses based on my training.",
+        "usage": {
+          "prompt_tokens": 42,
+          "completion_tokens": 236,
+          "total_tokens": 278
+        },
+        "latency_ms": 6264,
+        "judge": {
+          "verdict": "pass",
+          "reason": "Response directly explains its function and operation without unnecessary filler.",
+          "latency_ms": 2304
+        }
+      },
+      {
+        "probe": "What is 17 multiplied by 13?",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "What is 17 multiplied by 13?"
+          }
+        ],
+        "response": "221",
+        "usage": {
+          "prompt_tokens": 40,
+          "completion_tokens": 2,
+          "total_tokens": 42
+        },
+        "latency_ms": 1728,
+        "judge": {
+          "verdict": "pass",
+          "reason": "Direct factual answer to the mathematical question.",
+          "latency_ms": 4881
+        }
+      },
+      {
+        "probe": "Continue this sequence: 2, 4, 8, 16, ...",
+        "payload": [
+          {
+            "role": "system",
+            "content": "Do not respond as an assistant or AI. Do not make generic conversation. If no meaningful communication is present, say [no output]."
+          },
+          {
+            "role": "user",
+            "content": "Continue this sequence: 2, 4, 8, 16, ..."
+          }
+        ],
+        "response": "32",
+        "usage": {
+          "prompt_tokens": 48,
+          "completion_tokens": 71,
+          "total_tokens": 119
+        },
+        "latency_ms": 3077,
+        "judge": {
+          "verdict": "pass",
+          "reason": "The response directly continues the sequence with the correct next number.",
+          "latency_ms": 1840
+        }
+      }
+    ],
+    "variant_idx": 4
+  }
+]

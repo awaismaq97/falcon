@@ -141,9 +141,9 @@ relevance_weight: float = float(_cfg.get("relevance_weight", 0.6))
 # ---------------------------------------------------------------------------
 
 history_max_turns: int = int(_cfg.get("history_max_turns", 20))
-if not (1 <= history_max_turns <= 100):
+if not (0 <= history_max_turns <= 100):
     raise ValueError(
-        f"'history_max_turns' must be an integer in [1, 100], got {history_max_turns!r}."
+        f"'history_max_turns' must be an integer in [0, 100], got {history_max_turns!r}."
     )
 
 # ---------------------------------------------------------------------------
@@ -201,3 +201,11 @@ if _raw_patterns is not None and isinstance(_raw_patterns, list):
     assistant_language_patterns: list[str] = [str(p) for p in _raw_patterns]
 else:
     assistant_language_patterns: list[str] = _DEFAULT_ASSISTANT_LANGUAGE_PATTERNS
+
+# ---------------------------------------------------------------------------
+# Judge System Prompt
+# The exact instruction context sent to the judge model.
+# Falls back to an empty string if not set — judge.py has its own hardcoded
+# default for that case so the judge never runs without instructions.
+# ---------------------------------------------------------------------------
+judge_system_prompt: str = str(_cfg.get("judge_system_prompt") or "").strip()

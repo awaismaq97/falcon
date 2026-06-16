@@ -46,8 +46,16 @@ import falcon.identity as Identity
 import falcon.logger   as Logger
 import falcon.audit    as Audit
 import falcon.memory   as Memory
+import falcon.judge    as Judge
 from falcon.db import get_db
 from falcon.export_utils import make_export_envelope, to_json_str
+
+# Testing tab — import lazily inside the render function to avoid breaking
+# the app if the tests folder isn't on sys.path yet. We add it here.
+import sys as _sys, os as _os
+_tests_dir = _os.path.join(_os.path.dirname(__file__), "tests")
+if _tests_dir not in _sys.path:
+    _sys.path.insert(0, _tests_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +276,9 @@ def _init_session_state() -> None:
         "history_max_turns":           Config.history_max_turns,
         # Last context snapshot (annotated)
         "last_context_snapshot":    None,
+        # Judge
+        "use_judge":                False,
+        "judge_model":              Config.available_models[0] if Config.available_models else Config.default_model,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -451,6 +462,10 @@ def _handle_send(user_input: str) -> None:
             "elapsed_ms": round((time.monotonic() - t0) * 1000),
         })
 
+    # Judge settings — read now (main thread only)
+    use_judge   = st.session_state.get("use_judge", False)
+    judge_model = st.session_state.get("judge_model", Config.available_models[0] if Config.available_models else Config.default_model)
+
     _push("config", {
         "model":              model,
         "temperature":        gen["temperature"],
@@ -460,6 +475,8 @@ def _handle_send(user_input: str) -> None:
         "identity":           identity_id,
         "prompt_state":       prompt_state,
         "truncation_strategy": "last-n-turns",
+        "judge_enabled":      use_judge,
+        "judge_model":        judge_model if use_judge else None,
     })
 
     user_ts = _utc_iso()
@@ -534,16 +551,7 @@ def _handle_send(user_input: str) -> None:
     # Check assistant language patterns (banner shown after response)
     assistant_language_patterns = Config.assistant_language_patterns
 
-    _push("→ OpenRouter API call (streaming)", {
-        "model":              model,
-        "temperature":        gen["temperature"],
-        "top_p":              gen["top_p"],
-        "repetition_penalty": gen["repetition_penalty"],
-        "stop_tokens":        gen["stop_tokens"],
-        "messages_count":     len(raw_payload),
-    })
-
-    # Stream response
+    # ── Generate response ─────────────────────────────────────────────────
     api_t0 = time.monotonic()
     response_text = ""
     stream_gen = Engine.stream_inference(
@@ -556,24 +564,107 @@ def _handle_send(user_input: str) -> None:
         stop_tokens=gen["stop_tokens"],
     )
 
-    try:
+    judge_result = None
+    suppressed   = False
+
+    if use_judge:
+        # Judge mode: collect the full response silently first, then judge,
+        # then display the final result. Nothing is shown to the user until
+        # after the verdict so they never see a response that gets suppressed.
+        _push("→ generator call (buffered — judge mode ON)", {
+            "model":          model,
+            "messages_count": len(raw_payload),
+        })
+        try:
+            tokens = list(stream_gen)        # exhaust the generator silently
+            response_text = "".join(tokens)
+            # _StreamResult accumulates raw_output internally during iteration
+        except Exception as exc:
+            _push("ERROR — generator (buffered)", str(exc), status="error")
+            st.error(f"Inference failed: {exc}")
+            st.session_state.history   = Identity.load_history(identity_id)
+            st.session_state.trace_log = trace
+            return
+
+        api_latency_ms = round((time.monotonic() - api_t0) * 1000)
+
+        if not response_text or not response_text.strip():
+            response_text = "[no output]"
+
+        _push("← generator complete (buffered)", {
+            "latency_ms":      api_latency_ms,
+            "content_preview": response_text[:200],
+        })
+
+        # ── Judge ────────────────────────────────────────────────────────
+        _push("→ judge call", {
+            "judge_model":      judge_model,
+            "response_preview": response_text[:200],
+        })
+        try:
+            judge_result = Judge.evaluate(
+                response_text=response_text,
+                user_input=user_input,
+                model=judge_model,
+                api_key=Config.OPENROUTER_API_KEY,
+                system_prompt=Config.judge_system_prompt,
+            )
+        except Exception as exc:
+            _push("ERROR — judge call", str(exc), status="error")
+            judge_result = None
+
+        if judge_result is not None:
+            _push(
+                f"← judge verdict: {judge_result.verdict}",
+                {
+                    "verdict":    judge_result.verdict,
+                    "reason":     judge_result.reason,
+                    "latency_ms": judge_result.latency_ms,
+                    "model":      judge_result.model,
+                    "raw":        judge_result.raw,
+                    "error":      judge_result.error or None,
+                },
+                status="success" if judge_result.verdict == "pass" else "warn",
+            )
+            if judge_result.verdict == "suppress":
+                suppressed    = True
+                response_text = "[suppressed]"
+        else:
+            _push("judge skipped — defaulting to pass", {}, status="warn")
+
+        # ── Display final result (after verdict) ──────────────────────────
         with st.chat_message("assistant"):
-            response_text = st.write_stream(stream_gen)
-    except Exception as exc:
-        _push("ERROR — OpenRouter API", str(exc), status="error")
-        st.error(f"Inference failed: {exc}")
-        st.session_state.history   = Identity.load_history(identity_id)
-        st.session_state.trace_log = trace
-        return
+            st.markdown(response_text)
 
-    api_latency_ms = round((time.monotonic() - api_t0) * 1000)
+    else:
+        # Normal mode: stream tokens directly to the UI as they arrive.
+        _push("→ OpenRouter API call (streaming)", {
+            "model":              model,
+            "temperature":        gen["temperature"],
+            "top_p":              gen["top_p"],
+            "repetition_penalty": gen["repetition_penalty"],
+            "stop_tokens":        gen["stop_tokens"],
+            "messages_count":     len(raw_payload),
+        })
+        try:
+            with st.chat_message("assistant"):
+                response_text = st.write_stream(stream_gen)
+        except Exception as exc:
+            _push("ERROR — OpenRouter API", str(exc), status="error")
+            st.error(f"Inference failed: {exc}")
+            st.session_state.history   = Identity.load_history(identity_id)
+            st.session_state.trace_log = trace
+            return
 
-    # Always-output guarantee
-    if not response_text or not response_text.strip():
-        response_text = "[no output]"
+        api_latency_ms = round((time.monotonic() - api_t0) * 1000)
+
+        if not response_text or not response_text.strip():
+            response_text = "[no output]"
+
+        _push("← response complete", {"latency_ms": api_latency_ms, "content": response_text})
 
     # Assistant-language warning banner (Req 17.5, 16.5)
-    if not st.session_state.get("use_system_prompt", True):
+    if not suppressed and not st.session_state.get("use_system_prompt", True):
         for pattern in assistant_language_patterns:
             if pattern.lower() in response_text.lower():
                 st.warning(
@@ -581,8 +672,6 @@ def _handle_send(user_input: str) -> None:
                     f"(system prompt is OFF): `{pattern}`"
                 )
                 break
-
-    _push("← response complete", {"latency_ms": api_latency_ms, "content": response_text})
 
     # Token usage
     usage = stream_gen.usage
@@ -1590,6 +1679,243 @@ def _confirm_delete_identity_dialog(identity_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tab: Testing
+# ---------------------------------------------------------------------------
+
+def _render_testing_tab() -> None:
+    """Continuity Testing tab — run and review continuity experiments."""
+    try:
+        import continuity_tests as CT
+    except ImportError as exc:
+        st.error(f"Could not import continuity_tests: {exc}")
+        return
+
+    st.caption(
+        "Continuity experiments — check whether identity and behavior persist "
+        "when conditions change (model swap, context noise, prompt on/off)."
+    )
+
+    # Load test registry
+    try:
+        registry = CT.load_registry()
+    except Exception as exc:
+        st.error(f"Failed to load test registry: {exc}")
+        return
+
+    if not registry:
+        st.warning("No tests found in tests/test_registry.yaml.")
+        return
+
+    # ── Test selector ────────────────────────────────────────────────────
+    test_names = [t.get("name", t.get("slug", "?")) for t in registry]
+    chosen_idx = st.selectbox(
+        "Test",
+        options=list(range(len(registry))),
+        format_func=lambda i: test_names[i],
+        label_visibility="collapsed",
+        key="_testing_test_select",
+    )
+    test_def = registry[chosen_idx]
+    slug     = test_def.get("slug", "")
+
+    st.markdown(f"**{test_def.get('name','')}**")
+    st.caption(test_def.get("description", "").strip())
+
+    st.divider()
+
+    # ── Variant selector + Run button ────────────────────────────────────
+    variants = test_def.get("variants", [])
+    if not variants:
+        st.warning("This test has no variants defined in the registry.")
+        return
+
+    variant_names = [v.get("name", f"Variant {i}") for i, v in enumerate(variants)]
+    col_var, col_run = st.columns([4, 1])
+    with col_var:
+        chosen_var = st.selectbox(
+            "Variant",
+            options=list(range(len(variants))),
+            format_func=lambda i: variant_names[i],
+            label_visibility="collapsed",
+            key="_testing_variant_select",
+        )
+    with col_run:
+        run_clicked = st.button(
+            "▶ Run",
+            key="_testing_run_btn",
+            type="primary",
+            use_container_width=True,
+        )
+
+    variant = variants[chosen_var]
+    st.caption(f"_{variant.get('description', '')}_")
+
+    # Show resolved settings preview
+    with st.expander("Resolved settings for this variant", expanded=False):
+        try:
+            resolved = CT._build_variant_settings(variant)
+            st.json(resolved)
+        except Exception as exc:
+            st.warning(f"Could not resolve settings: {exc}")
+
+    # ── Run action ────────────────────────────────────────────────────────
+    if run_clicked:
+        with st.spinner(f"Running '{variant_names[chosen_var]}'… (live API calls, may take 10–30s)"):
+            try:
+                record = CT.run_test_variant(slug, chosen_var)
+                st.success(
+                    f"Run complete — {len(record.get('probe_results', []))} probes, "
+                    f"run saved to tests/runs/{slug}.json"
+                )
+                st.session_state[f"_testing_highlight_{slug}"] = record.get("run_at", "")
+            except Exception as exc:
+                st.error(f"Run failed: {exc}")
+                import traceback
+                st.code(traceback.format_exc())
+
+    st.divider()
+
+    # ── Run history ───────────────────────────────────────────────────────
+    st.markdown("#### Run History")
+
+    try:
+        history = CT.load_run_history(slug)   # newest first
+    except Exception as exc:
+        st.error(f"Could not load run history: {exc}")
+        return
+
+    if not history:
+        st.info("No runs yet for this test. Select a variant and click ▶ Run.")
+        return
+
+    # Report download button
+    report_content = CT.read_report(slug)
+    if report_content:
+        st.download_button(
+            label="⬇ Download full report (.md)",
+            data=report_content,
+            file_name=f"falcon_{slug}_report.md",
+            mime="text/markdown",
+            key=f"_testing_report_dl_{slug}",
+        )
+
+    st.caption(f"{len(history)} run{'s' if len(history) != 1 else ''} (newest first)")
+
+    highlight_ts = st.session_state.get(f"_testing_highlight_{slug}", "")
+
+    for run_idx, run in enumerate(history):
+        run_at   = run.get("run_at", "?")
+        settings = run.get("settings", {})
+        v_name   = settings.get("variant_name", f"Variant {run.get('variant_idx','?')}")
+        model    = settings.get("model", "?")
+        sp_flag  = "SP:ON" if settings.get("system_prompt_on") else "SP:OFF"
+        noise    = settings.get("noise_level", 0)
+        n_probes = len(run.get("probe_results", []))
+        is_new   = (run_at == highlight_ts)
+        badge    = " 🆕" if is_new else ""
+
+        with st.expander(
+            f"Run {run_idx + 1}{badge} — {run_at} — {v_name} — `{model[:35]}`",
+            expanded=is_new,
+        ):
+            # Settings bar
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Model",   model.split("/")[-1][:20])
+            c2.metric("Sys Prompt", "ON" if settings.get("system_prompt_on") else "OFF")
+            c3.metric("Memory",  "ON" if settings.get("use_memory") else "OFF")
+            c4.metric("Judge",   "ON" if settings.get("use_judge") else "OFF")
+            c5.metric("Noise",   str(noise))
+
+            st.divider()
+
+            # Probe results: payload | settings | output (3 columns)
+            probe_results = run.get("probe_results", [])
+            for p_idx, pr in enumerate(probe_results):
+                probe    = pr.get("probe", "")
+                payload  = pr.get("payload", [])
+                response = pr.get("response", "")
+                latency  = pr.get("latency_ms", 0)
+                usage    = pr.get("usage") or {}
+                judge    = pr.get("judge")
+
+                st.markdown(
+                    f"**Probe {p_idx + 1} of {n_probes}:** "
+                    f"_{probe[:120]}{'…' if len(probe) > 120 else ''}_"
+                )
+
+                col_payload, col_settings, col_output = st.columns([3, 2, 3])
+
+                with col_payload:
+                    st.markdown(
+                        "<div style='font-size:0.72rem;font-weight:600;color:#f59e0b;"
+                        "font-family:monospace;text-transform:uppercase;margin-bottom:4px'>"
+                        "PAYLOAD</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(f"{len(payload)} messages")
+                    st.json(payload, expanded=False)
+
+                with col_settings:
+                    st.markdown(
+                        "<div style='font-size:0.72rem;font-weight:600;color:#3b82f6;"
+                        "font-family:monospace;text-transform:uppercase;margin-bottom:4px'>"
+                        "SETTINGS</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(f"`{model}`")
+                    st.json({
+                        "system_prompt": "ON" if settings.get("system_prompt_on") else "OFF",
+                        "temperature":   settings.get("temperature"),
+                        "top_p":         settings.get("top_p"),
+                        "rep_penalty":   settings.get("repetition_penalty"),
+                        "memory":        settings.get("use_memory"),
+                        "judge":         settings.get("use_judge"),
+                        "noise_entries": noise,
+                        "hist_injected": settings.get("inject_history", False),
+                    }, expanded=False)
+
+                with col_output:
+                    st.markdown(
+                        "<div style='font-size:0.72rem;font-weight:600;color:#22c55e;"
+                        "font-family:monospace;text-transform:uppercase;margin-bottom:4px'>"
+                        "OUTPUT</div>",
+                        unsafe_allow_html=True,
+                    )
+                    token_str = f"`{usage.get('total_tokens','?')} tok` · `{latency}ms`"
+                    if judge:
+                        v = judge.get("verdict", "?")
+                        r = judge.get("reason", "")
+                        emoji = "✅" if v == "pass" else ("🚫" if v == "suppress" else "⚠️")
+                        st.caption(f"{token_str} · Judge: {emoji} `{v}`")
+                        if v == "suppress":
+                            st.warning(f"Suppressed: {r}")
+                    else:
+                        st.caption(token_str)
+
+                    st.markdown(
+                        f"<div style='background:#161b27;border:1px solid #1e2535;"
+                        f"border-radius:8px;padding:10px 14px;font-size:0.85rem;"
+                        f"color:#cbd5e1;line-height:1.6;white-space:pre-wrap'>"
+                        f"{response[:600].replace('<','&lt;').replace('>','&gt;')}"
+                        f"{'…' if len(response) > 600 else ''}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                if p_idx < n_probes - 1:
+                    st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+
+    # ── Report preview ────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### Full Report")
+    if report_content:
+        with st.expander("Preview report markdown", expanded=False):
+            st.markdown(report_content)
+    else:
+        st.caption("_No report generated yet. Run at least one variant to generate it._")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1940,11 +2266,45 @@ def main() -> None:
         # ── Truncation Strategy ───────────────────────────────────────────────
         st.markdown('<div class="sidebar-section-label">History Truncation</div>', unsafe_allow_html=True)
         new_max_turns = st.number_input(
-            "Max turns", min_value=1, max_value=100,
+            "Max turns", min_value=0, max_value=100,
             value=int(st.session_state.get("history_max_turns", Config.history_max_turns)),
             step=1, key="_trunc_turns_input", label_visibility="collapsed",
         )
+        if new_max_turns == 0:
+            st.caption("0 — no history sent to model")
         st.session_state["history_max_turns"] = new_max_turns
+
+        # ── Judge ─────────────────────────────────────────────────────────────
+        st.markdown('<div class="sidebar-section-label">Judge</div>', unsafe_allow_html=True)
+
+        use_judge = st.checkbox(
+            "Judge",
+            value=st.session_state.get("use_judge", False),
+            key="_judge_checkbox",
+        )
+        st.session_state.use_judge = use_judge
+
+        if use_judge:
+            st.caption("ON — judge evaluates each response before display")
+            if Config.available_models:
+                current_judge = st.session_state.get("judge_model", Config.available_models[0])
+                judge_idx = (
+                    Config.available_models.index(current_judge)
+                    if current_judge in Config.available_models
+                    else 0
+                )
+                selected_judge = st.selectbox(
+                    "Judge model",
+                    options=Config.available_models,
+                    index=judge_idx,
+                    label_visibility="collapsed",
+                    key="_judge_model_select",
+                )
+                st.session_state.judge_model = selected_judge
+            else:
+                st.caption(st.session_state.get("judge_model", Config.default_model))
+        else:
+            st.caption("OFF — responses shown as generated")
 
         # ── Generation Controls ───────────────────────────────────────────────
         st.markdown('<div class="sidebar-section-label">Generation Controls</div>', unsafe_allow_html=True)
@@ -2050,8 +2410,8 @@ def main() -> None:
     _bg_poller()
 
     # ── Main tabs ─────────────────────────────────────────────────────────────
-    tab_chat, tab_context, tab_memory, tab_audit, tab_logs = st.tabs(
-        ["Chat", "Context", "Memory", "Audit", "Logs"]
+    tab_chat, tab_context, tab_memory, tab_audit, tab_logs, tab_testing = st.tabs(
+        ["Chat", "Context", "Memory", "Audit", "Logs", "Testing"]
     )
 
     with tab_chat:
@@ -2068,6 +2428,9 @@ def main() -> None:
 
     with tab_logs:
         _render_logs_tab()
+
+    with tab_testing:
+        _render_testing_tab()
 
 
 if __name__ == "__main__":

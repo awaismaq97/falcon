@@ -102,7 +102,13 @@ def _truncate_history_last_n(
     history: list[dict],
     max_turns: int,
 ) -> tuple[list[dict], int]:
-    """Keep the most recent max_turns turn-pairs."""
+    """Keep the most recent max_turns turn-pairs.
+
+    max_turns=0 means no history is included — all messages are dropped.
+    """
+    if max_turns == 0:
+        return [], len(history)
+
     pairs: list[list[dict]] = []
     i = 0
     while i < len(history):

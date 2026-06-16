@@ -1,0 +1,137 @@
+# test_registry.yaml — Continuity test definitions.
+#
+# Each entry defines one test type. The runner (continuity_tests.py) reads
+# this file and dispatches to the matching runner_fn.
+#
+# Fields per entry:
+#   slug         — unique identifier, used as filename key for run history
+#   name         — human-readable display name
+#   description  — what the test is checking
+#   runner_fn    — Python function name in continuity_tests.py to call
+#   variants     — list of named condition sets to run
+#     Each variant:
+#       name           — short label shown in UI
+#       description    — what is different in this variant
+#       system_prompt  — string | null | "__default__" (use app default)
+#       use_memory     — bool  (inject memory block or not)
+#       use_judge      — bool
+#       model          — model id | "__default__" (use config default_model)
+#       extra_params   — dict of any extra generation overrides
+
+tests:
+
+  - slug: model_relocation
+    name: "Model Relocation Test"
+    description: >
+      Swaps the underlying model mid-session and checks whether key behaviors
+      and identity markers persist. The same probe question is sent to multiple
+      models under identical conditions, then output consistency is evaluated.
+    runner_fn: run_model_relocation
+    probe_messages:
+      - role: user
+        content: "Describe your role and how you operate in one sentence."
+      - role: user
+        content: "What is 17 multiplied by 13?"
+      - role: user
+        content: "Continue this sequence: 2, 4, 8, 16, ..."
+    variants:
+      - name: "System Prompt ON — default model"
+        description: "Baseline: default model, system prompt active, no memory."
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: false
+        model: "__default__"
+        extra_params: {}
+
+      - name: "System Prompt OFF — default model"
+        description: "Same model, system prompt removed. Tests assistant-persona bleed."
+        system_prompt: null
+        use_memory: false
+        use_judge: false
+        model: "__default__"
+        extra_params: {}
+
+      - name: "System Prompt ON — model swap A"
+        description: "Swaps to first available_models entry. Checks cross-model persona fidelity."
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: false
+        model: "__slot_0__"
+        extra_params: {}
+
+      - name: "System Prompt ON — model swap B"
+        description: "Swaps to second available_models entry."
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: false
+        model: "__slot_1__"
+        extra_params: {}
+
+      - name: "Judge ON — default model"
+        description: "Same probe with Judge active. Checks whether judge suppresses identity leaks."
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: true
+        model: "__default__"
+        extra_params: {}
+
+  - slug: context_dilution
+    name: "Context Dilution Test"
+    description: >
+      Injects irrelevant or noisy content into the context (as memory or history)
+      and checks whether the identity and target behavior persists despite the noise.
+    runner_fn: run_context_dilution
+    probe_messages:
+      - role: user
+        content: "What is your name and what is your primary function?"
+      - role: user
+        content: "Summarize what you know about quantum entanglement in one sentence."
+      - role: user
+        content: "Give me the next prime number after 97."
+    variants:
+      - name: "No noise — baseline"
+        description: "Clean context, no injected noise. Baseline for comparison."
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: false
+        noise_level: 0
+        model: "__default__"
+        extra_params: {}
+
+      - name: "Low noise — 3 irrelevant memory entries"
+        description: "3 unrelated semantic memory entries injected alongside probe."
+        system_prompt: "__default__"
+        use_memory: true
+        noise_level: 3
+        use_judge: false
+        model: "__default__"
+        extra_params: {}
+
+      - name: "Medium noise — 8 irrelevant memory entries"
+        description: "8 unrelated semantic memory entries injected."
+        system_prompt: "__default__"
+        use_memory: true
+        noise_level: 8
+        use_judge: false
+        model: "__default__"
+        extra_params: {}
+
+      - name: "High noise — 15 irrelevant entries + noisy history"
+        description: "15 noise memory entries plus 5 turns of off-topic history."
+        system_prompt: "__default__"
+        use_memory: true
+        noise_level: 15
+        inject_history: true
+        use_judge: false
+        model: "__default__"
+        extra_params: {}
+
+      - name: "Noise + System Prompt OFF"
+        description: "High noise with system prompt removed. Worst-case dilution scenario."
+        system_prompt: null
+        use_memory: true
+        noise_level: 10
+        inject_history: true
+        use_judge: false
+        model: "__default__"
+        extra_params: {}
