@@ -279,6 +279,17 @@ def _init_session_state() -> None:
         # Judge
         "use_judge":                False,
         "judge_model":              Config.available_models[0] if Config.available_models else Config.default_model,
+        # Pre-send payload preview — holds assembled context before user confirms generation
+        "_pending_send":            None,   # dict | None
+        "_pending_confirmed":       False,
+        "_pending_cancelled":       False,
+        # Payload review toggle — when False, messages go directly to the model
+        "payload_review_enabled":   False,
+        # Three-stage send state machine used when review is ON:
+        #   None        → idle
+        #   "preview"   → dialog open, waiting for user action
+        #   "execute"   → dialog closed, generation about to run this render
+        "_send_stage":              None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -431,10 +442,223 @@ def _render_context_view(cv: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pre-send payload preview builder (pure — no DB writes, no API calls)
+# ---------------------------------------------------------------------------
+
+def _build_send_preview(user_input: str) -> dict:
+    """Assemble the payload for user_input without logging or calling the model.
+
+    Returns a dict stored in st.session_state._pending_send so the dialog can
+    display it before the user confirms. Nothing is written to DB here.
+    """
+    identity_id = st.session_state.identity_id
+    model       = st.session_state.selected_model
+    gen         = _get_gen_settings()
+
+    if st.session_state.get("use_system_prompt", False):
+        system_prompt = st.session_state.get("system_prompt_text", "").strip()
+    else:
+        system_prompt = ""
+
+    history_max_turns = st.session_state.get("history_max_turns", Config.history_max_turns)
+
+    # Memory retrieval (same logic as _handle_send)
+    try:
+        retrieval = Memory.retrieve_for_generation(
+            identity_id=identity_id,
+            query=user_input,
+            top_k_per_type=Config.top_k_per_type,
+            recency_weight=Config.recency_weight,
+            relevance_weight=Config.relevance_weight,
+        )
+        retrieved_entries = retrieval.entries
+    except Exception:
+        retrieval = None
+        retrieved_entries = []
+
+    if not st.session_state.get("use_persona", True):
+        retrieved_entries = [e for e in retrieved_entries if e.get("memory_type") != "persona"]
+
+    messages = list(st.session_state.history) + [{"role": "user", "content": user_input}]
+    messages_for_model = [{"role": m["role"], "content": m["content"]} for m in messages]
+
+    try:
+        annotated_payload, context_snapshot = Engine.build_annotated_payload(
+            system_prompt=system_prompt,
+            messages=messages_for_model,
+            memory_block=retrieved_entries,
+            truncation_strategy="last-n-turns",
+            history_max_turns=history_max_turns,
+        )
+        if retrieval is not None:
+            context_snapshot["retrieval_result"] = retrieval.to_display_dict()
+        raw_payload = [{"role": e["role"], "content": e["content"]} for e in annotated_payload]
+    except Exception:
+        annotated_payload = []
+        raw_payload = Engine.build_payload(system_prompt, messages_for_model)
+        context_snapshot = Engine.build_context_view(
+            system_prompt=system_prompt,
+            messages=messages_for_model,
+            retrieved_memory=retrieved_entries,
+        )
+
+    return {
+        "user_input":         user_input,
+        "identity_id":        identity_id,
+        "model":              model,
+        "gen":                gen,
+        "system_prompt":      system_prompt,
+        "retrieved_entries":  retrieved_entries,
+        "raw_payload":        raw_payload,
+        "annotated_payload":  annotated_payload,
+        "context_snapshot":   context_snapshot,
+        "history_max_turns":  history_max_turns,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Payload preview dialog
+# ---------------------------------------------------------------------------
+
+# Source → colour mapping (matches the Context tab)
+_SOURCE_COLORS = {
+    "system-prompt":   "#3b82f6",
+    "persona":         "#a855f7",
+    "memory":          "#f59e0b",
+    "history":         "#64748b",
+    "user-input":      "#22c55e",
+    "history-summary": "#06b6d4",
+}
+_SOURCE_LABELS = {
+    "system-prompt":   "System Prompt",
+    "persona":         "Persona",
+    "memory":          "Memory",
+    "history":         "History",
+    "user-input":      "User Input",
+    "history-summary": "History Summary",
+}
+
+
+def _render_send_preview_inline(preview: dict) -> None:
+    """Render the payload preview inline in the chat tab (no modal/dialog).
+
+    Displays the assembled payload colour-coded by source with Confirm and
+    Cancel buttons. Because this is plain inline Streamlit — not a dialog —
+    button clicks cause a normal full-page rerun and session state changes
+    take effect immediately on the next render.
+    """
+    annotated = preview.get("annotated_payload") or []
+    raw       = preview.get("raw_payload") or []
+    model     = preview.get("model", "")
+    gen       = preview.get("gen", {})
+    sp        = preview.get("system_prompt", "")
+    sp_on     = bool(sp and sp.strip())
+    n_mem     = sum(1 for e in annotated if e.get("source") == "memory")
+    n_hist    = sum(1 for e in annotated if e.get("source") == "history")
+    dropped   = preview.get("context_snapshot", {}).get("history_dropped_turns", 0)
+
+    st.markdown(
+        "<div style='border:1px solid #2d3748;border-radius:12px;"
+        "background:#0d1117;padding:18px 20px;margin:12px 0'>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        "<span style='color:#f59e0b;font-size:0.72rem;font-weight:700;"
+        "font-family:monospace;text-transform:uppercase;letter-spacing:0.08em'>"
+        "⬡ PAYLOAD REVIEW — review before sending</span>",
+        unsafe_allow_html=True,
+    )
+
+    st.caption(
+        "This is the exact context that will be sent to the model. "
+        "Click **⚡ Generate answer** to proceed or **✕ Discard** to cancel."
+    )
+
+    # Metrics
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Messages",   len(raw))
+    m2.metric("Memory",     f"{n_mem} entries")
+    m3.metric("History",    f"{n_hist} turns" + (f" (+{dropped} dropped)" if dropped else ""))
+    m4.metric("Sys Prompt", "ON" if sp_on else "OFF")
+
+    st.divider()
+
+    # Annotated payload — colour-coded by source
+    for elem in annotated:
+        src          = elem.get("source", "history")
+        color        = _SOURCE_COLORS.get(src, "#64748b")
+        label        = _SOURCE_LABELS.get(src, src)
+        role         = elem.get("role", "")
+        content      = elem.get("content", "")
+        preview_text = content[:400] + ("…" if len(content) > 400 else "")
+        st.markdown(
+            f"<div style='border-left:3px solid {color};padding:6px 12px;"
+            f"margin:4px 0;background:#161b27;border-radius:4px'>"
+            f"<span style='color:{color};font-size:0.70rem;font-weight:600;"
+            f"font-family:monospace;text-transform:uppercase'>{label}</span>"
+            f"<span style='color:#475569;font-size:0.70rem;margin-left:8px'>{role}</span>"
+            f"<div style='color:#cbd5e1;font-size:0.82rem;margin-top:4px;"
+            f"white-space:pre-wrap'>{preview_text}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    if dropped:
+        st.markdown(
+            f"<div style='border-left:3px solid #374151;padding:6px 12px;"
+            f"margin:4px 0;background:#111827;border-radius:4px;"
+            f"color:#6b7280;font-style:italic;font-size:0.82rem'>"
+            f"▸ [{dropped} turn{'s' if dropped != 1 else ''} truncated from history]"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    with st.expander("Generation settings", expanded=False):
+        st.json({
+            "model":              model,
+            "temperature":        gen.get("temperature"),
+            "top_p":              gen.get("top_p"),
+            "repetition_penalty": gen.get("repetition_penalty"),
+            "stop_tokens":        gen.get("stop_tokens"),
+            "system_prompt":      "ON" if sp_on else "OFF",
+        })
+
+    with st.expander("Raw JSON payload", expanded=False):
+        st.json(raw)
+
+    st.divider()
+
+    col_ok, col_cancel, _ = st.columns([2, 1, 3])
+    with col_ok:
+        if st.button(
+            "⚡ Generate answer",
+            type="primary",
+            use_container_width=True,
+            key="_preview_confirm",
+        ):
+            st.session_state._send_stage        = "execute"
+            st.session_state._pending_confirmed = True
+            st.rerun()
+    with col_cancel:
+        if st.button(
+            "✕ Discard",
+            use_container_width=True,
+            key="_preview_cancel",
+        ):
+            st.session_state._send_stage        = None
+            st.session_state._pending_cancelled = True
+            st.session_state._pending_send      = None
+            st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
 # Send flow
 # ---------------------------------------------------------------------------
 
-def _handle_send(user_input: str) -> None:
+def _handle_send(user_input: str, preview: dict | None = None) -> None:
     identity_id = st.session_state.identity_id
     model       = st.session_state.selected_model
     gen         = _get_gen_settings()
@@ -449,6 +673,18 @@ def _handle_send(user_input: str) -> None:
 
     # Truncation settings from session state
     history_max_turns = st.session_state.get("history_max_turns", Config.history_max_turns)
+
+    # ── If a pre-built preview is available, reuse its payload/context ──
+    if preview is not None:
+        raw_payload       = preview["raw_payload"]
+        annotated_payload = preview.get("annotated_payload") or raw_payload
+        context_snapshot  = preview["context_snapshot"]
+        retrieved_entries = preview["retrieved_entries"]
+        # Honour any settings captured at preview time
+        model         = preview.get("model", model)
+        gen           = preview.get("gen", gen)
+        system_prompt = preview.get("system_prompt", system_prompt)
+        prompt_state  = "present" if (system_prompt and system_prompt.strip()) else "empty"
 
     trace: list[dict] = []
     t0 = time.monotonic()
@@ -493,54 +729,59 @@ def _handle_send(user_input: str) -> None:
     _push("user → logged", {"collection": "messages", "identity": identity_id,
                              "entry": {"role": "user", "content": user_input}})
 
-    # Memory retrieval — visible, with reasoning
-    try:
-        retrieval = Memory.retrieve_for_generation(
-            identity_id=identity_id,
-            query=user_input,
-            top_k_per_type=Config.top_k_per_type,
-            recency_weight=Config.recency_weight,
-            relevance_weight=Config.relevance_weight,
-        )
-        retrieved_entries = retrieval.entries
-        _push("memory retrieved", retrieval.to_display_dict())
-    except Exception as exc:
-        retrieval = None
-        retrieved_entries = []
-        _push("memory retrieval failed", str(exc), status="warn")
+    if preview is None:
+        # ── Build payload fresh (no preview was shown) ──────────────────
+        # Memory retrieval — visible, with reasoning
+        try:
+            retrieval = Memory.retrieve_for_generation(
+                identity_id=identity_id,
+                query=user_input,
+                top_k_per_type=Config.top_k_per_type,
+                recency_weight=Config.recency_weight,
+                relevance_weight=Config.relevance_weight,
+            )
+            retrieved_entries = retrieval.entries
+            _push("memory retrieved", retrieval.to_display_dict())
+        except Exception as exc:
+            retrieval = None
+            retrieved_entries = []
+            _push("memory retrieval failed", str(exc), status="warn")
 
-    # If persona is disabled, strip persona entries from retrieved memory
-    if not st.session_state.get("use_persona", True):
-        retrieved_entries = [e for e in retrieved_entries if e.get("memory_type") != "persona"]
+        # If persona is disabled, strip persona entries from retrieved memory
+        if not st.session_state.get("use_persona", True):
+            retrieved_entries = [e for e in retrieved_entries if e.get("memory_type") != "persona"]
 
-    # Build messages for model (full history + current user turn)
-    messages = list(st.session_state.history) + [
-        {"role": "user", "content": user_input}
-    ]
-    messages_for_model = [{"role": m["role"], "content": m["content"]} for m in messages]
+        # Build messages for model (full history + current user turn)
+        messages = list(st.session_state.history) + [
+            {"role": "user", "content": user_input}
+        ]
+        messages_for_model = [{"role": m["role"], "content": m["content"]} for m in messages]
 
-    # Build annotated payload with truncation and source annotation
-    try:
-        annotated_payload, context_snapshot = Engine.build_annotated_payload(
-            system_prompt=system_prompt,
-            messages=messages_for_model,
-            memory_block=retrieved_entries,
-            truncation_strategy="last-n-turns",
-            history_max_turns=history_max_turns,
-        )
-        if retrieval is not None:
-            context_snapshot["retrieval_result"] = retrieval.to_display_dict()
-        raw_payload = [{"role": e["role"], "content": e["content"]} for e in annotated_payload]
-    except Exception as exc:
-        _push("ERROR — build_annotated_payload", str(exc), status="error")
-        # Fallback to simple build_payload
-        raw_payload = Engine.build_payload(system_prompt, messages_for_model)
-        context_snapshot = Engine.build_context_view(
-            system_prompt=system_prompt,
-            messages=messages_for_model,
-            retrieved_memory=retrieved_entries,
-        )
-        annotated_payload = raw_payload
+        # Build annotated payload with truncation and source annotation
+        try:
+            annotated_payload, context_snapshot = Engine.build_annotated_payload(
+                system_prompt=system_prompt,
+                messages=messages_for_model,
+                memory_block=retrieved_entries,
+                truncation_strategy="last-n-turns",
+                history_max_turns=history_max_turns,
+            )
+            if retrieval is not None:
+                context_snapshot["retrieval_result"] = retrieval.to_display_dict()
+            raw_payload = [{"role": e["role"], "content": e["content"]} for e in annotated_payload]
+        except Exception as exc:
+            _push("ERROR — build_annotated_payload", str(exc), status="error")
+            # Fallback to simple build_payload
+            raw_payload = Engine.build_payload(system_prompt, messages_for_model)
+            context_snapshot = Engine.build_context_view(
+                system_prompt=system_prompt,
+                messages=messages_for_model,
+                retrieved_memory=retrieved_entries,
+            )
+            annotated_payload = raw_payload
+    else:
+        # ── Reuse the preview that was already shown to the user ─────────
+        _push("memory retrieved", {"note": "reused from pre-send preview"})
 
     st.session_state.last_context_view     = context_snapshot
     st.session_state.last_context_snapshot = context_snapshot
@@ -926,12 +1167,60 @@ def _render_chat_tab(user_input: str | None) -> None:
                 _show_payload_dialog(payload)
             st.session_state._view_payload_ts = None
 
-    # New message
-    if user_input and user_input.strip():
-        with st.chat_message("user"):
-            st.markdown(user_input)
-        _handle_send(user_input)
+    # ── Send state machine ───────────────────────────────────────────────
+    #
+    # Review ON  (three stages, all inline — no modal/dialog):
+    #   idle      → user types → stage="preview"
+    #               preview panel renders inline below the user bubble
+    #   preview   → "⚡ Generate answer" → stage="execute" + st.rerun()
+    #               preview panel is gone (not rendered), spinner shows
+    #   execute   → _handle_send runs, stage=None, st.rerun() → answer shown
+    #
+    #   "✕ Discard" → stage=None, _pending_send=None + st.rerun() → clean
+    #
+    # Review OFF (direct):
+    #   user types → _handle_send immediately, no preview ever shown
+
+    review_enabled = st.session_state.get("payload_review_enabled", True)
+    send_stage     = st.session_state.get("_send_stage")
+
+    # ── Stage: execute — preview gone, run generation ────────────────────
+    if send_stage == "execute" and st.session_state.get("_pending_send"):
+        preview_data = st.session_state._pending_send
+        st.session_state._send_stage        = None
+        st.session_state._pending_confirmed = False
+        st.session_state._pending_send      = None
+        with st.spinner("Generating…"):
+            _handle_send(preview_data["user_input"], preview=preview_data)
         st.rerun()
+
+    # ── Stage: preview — show inline review panel ─────────────────────────
+    elif send_stage == "preview" and st.session_state.get("_pending_send"):
+        _render_send_preview_inline(st.session_state._pending_send)
+
+    # ── Cancellation ─────────────────────────────────────────────────────
+    if st.session_state.get("_pending_cancelled"):
+        st.session_state._pending_cancelled = False
+        st.session_state._pending_send      = None
+        st.session_state._send_stage        = None
+
+    # ── New raw input ─────────────────────────────────────────────────────
+    if user_input and user_input.strip() and st.session_state.get("_pending_send") is None:
+        if review_enabled:
+            with st.chat_message("user"):
+                st.markdown(user_input)
+            preview_data = _build_send_preview(user_input)
+            st.session_state._pending_send      = preview_data
+            st.session_state._send_stage        = "preview"
+            st.session_state._pending_confirmed = False
+            st.session_state._pending_cancelled = False
+            _render_send_preview_inline(preview_data)
+        else:
+            with st.chat_message("user"):
+                st.markdown(user_input)
+            with st.spinner("Generating…"):
+                _handle_send(user_input)
+            st.rerun()
 
     # Footer controls
     if history:
@@ -2305,6 +2594,20 @@ def main() -> None:
                 st.caption(st.session_state.get("judge_model", Config.default_model))
         else:
             st.caption("OFF — responses shown as generated")
+
+        # ── Payload Review ────────────────────────────────────────────────────
+        st.markdown('<div class="sidebar-section-label">Payload Review</div>', unsafe_allow_html=True)
+
+        payload_review = st.checkbox(
+            "Payload review",
+            value=st.session_state.get("payload_review_enabled", False),
+            key="_payload_review_checkbox",
+        )
+        st.session_state.payload_review_enabled = payload_review
+        if payload_review:
+            st.caption("ON — assembled payload shown before each send")
+        else:
+            st.caption("OFF — messages sent directly to model")
 
         # ── Generation Controls ───────────────────────────────────────────────
         st.markdown('<div class="sidebar-section-label">Generation Controls</div>', unsafe_allow_html=True)
