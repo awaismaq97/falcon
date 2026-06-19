@@ -182,6 +182,10 @@ memory_extraction_enabled: bool = bool(_cfg.get("memory_extraction_enabled", Tru
 # Falls back to default_model if not specified in config.yaml.
 extraction_model: str = str(_cfg.get("extraction_model") or _default_model)
 
+# Model used for conversation summarization.
+# Falls back to default_model if not specified in config.yaml.
+summary_model: str = str(_cfg.get("summary_model") or _default_model)
+
 # ---------------------------------------------------------------------------
 # Assistant Language Detection (Req 16.5)
 # Patterns that detect when the model is responding as an AI assistant

@@ -70,4 +70,6 @@ def _make_db() -> Database:
     db["memory"].create_index("identity_id")
     db["memory"].create_index([("identity_id", 1), ("memory_type", 1)])
     db["memory"].create_index([("identity_id", 1), ("pinned", -1)])
+    # Conversation summary index
+    db["conversation_summaries"].create_index("identity_id", unique=True)
     return db

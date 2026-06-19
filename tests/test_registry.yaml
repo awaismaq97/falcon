@@ -135,3 +135,81 @@ tests:
         use_judge: false
         model: "__default__"
         extra_params: {}
+
+  - slug: history_mode_comparison
+    name: "History Mode Comparison"
+    description: >
+      Plants a seeded multi-turn conversation containing specific facts, priorities,
+      identity markers, relationship dynamics, and process rules — then probes for
+      each continuity dimension under three history modes: raw, summary, and hybrid.
+
+      Evaluates whether AI-generated summaries preserve or lose:
+        - Factual continuity   (concrete facts, names, numbers)
+        - Priority continuity  (stated goals, constraints, what matters most)
+        - Identity continuity  (user's role and self-description)
+        - Relationship continuity (team dynamics, decisions made about others)
+        - Process continuity   (working style and explicit rules)
+
+      Use this test to determine the right history mode for your use case.
+    runner_fn: run_history_mode_comparison
+    probe_messages: []
+    variants:
+      - name: "Default model — SP ON — full history"
+        description: >
+          Baseline: default model, system prompt ON, history_max_turns=20
+          (all seeded turns included in raw/hybrid modes).
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: false
+        model: "__default__"
+        history_modes: ["raw", "summary", "hybrid"]
+        history_max_turns: 20
+        extra_params: {}
+
+      - name: "Default model — SP ON — truncated (3 turns)"
+        description: >
+          Same model, but history_max_turns=3. Raw/hybrid only see the last 3 turns.
+          Tests whether summary preserves what truncation drops.
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: false
+        model: "__default__"
+        history_modes: ["raw", "summary", "hybrid"]
+        history_max_turns: 3
+        extra_params: {}
+
+      - name: "Default model — SP OFF — full history"
+        description: >
+          System prompt disabled. Checks whether continuity dimensions survive
+          without any identity grounding from the system prompt.
+        system_prompt: null
+        use_memory: false
+        use_judge: false
+        model: "__default__"
+        history_modes: ["raw", "summary", "hybrid"]
+        history_max_turns: 20
+        extra_params: {}
+
+      - name: "Model swap — SP ON — full history"
+        description: >
+          Uses slot_0 (first available model). Tests whether a different model
+          interprets the summary identically to raw history.
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: false
+        model: "__slot_0__"
+        history_modes: ["raw", "summary", "hybrid"]
+        history_max_turns: 20
+        extra_params: {}
+
+      - name: "Default model — SP ON — summary only vs raw only"
+        description: >
+          Runs only summary and raw (no hybrid). Clean head-to-head comparison
+          with no interaction effects from mixing modes.
+        system_prompt: "__default__"
+        use_memory: false
+        use_judge: false
+        model: "__default__"
+        history_modes: ["raw", "summary"]
+        history_max_turns: 20
+        extra_params: {}

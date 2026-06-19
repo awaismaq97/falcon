@@ -47,6 +47,7 @@ import falcon.logger   as Logger
 import falcon.audit    as Audit
 import falcon.memory   as Memory
 import falcon.judge    as Judge
+import falcon.summarizer as Summarizer
 from falcon.db import get_db
 from falcon.export_utils import make_export_envelope, to_json_str
 
@@ -274,6 +275,8 @@ def _init_session_state() -> None:
         "_memory_add_content":      "",
         # History truncation
         "history_max_turns":           Config.history_max_turns,
+        # History mode: "raw" | "summary" | "hybrid"
+        "history_mode":                "raw",
         # Last context snapshot (annotated)
         "last_context_snapshot":    None,
         # Judge
@@ -461,6 +464,12 @@ def _build_send_preview(user_input: str) -> dict:
         system_prompt = ""
 
     history_max_turns = st.session_state.get("history_max_turns", Config.history_max_turns)
+    history_mode = st.session_state.get("history_mode", "raw")
+
+    # Fetch summary if needed for this history mode
+    history_summary: str | None = None
+    if history_mode in ("summary", "hybrid"):
+        history_summary = Summarizer.get_summary(identity_id)
 
     # Memory retrieval (same logic as _handle_send)
     try:
@@ -489,6 +498,8 @@ def _build_send_preview(user_input: str) -> dict:
             memory_block=retrieved_entries,
             truncation_strategy="last-n-turns",
             history_max_turns=history_max_turns,
+            history_mode=history_mode,
+            history_summary=history_summary,
         )
         if retrieval is not None:
             context_snapshot["retrieval_result"] = retrieval.to_display_dict()
@@ -513,6 +524,8 @@ def _build_send_preview(user_input: str) -> dict:
         "annotated_payload":  annotated_payload,
         "context_snapshot":   context_snapshot,
         "history_max_turns":  history_max_turns,
+        "history_mode":       history_mode,
+        "history_summary":    history_summary,
     }
 
 
@@ -673,6 +686,12 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
 
     # Truncation settings from session state
     history_max_turns = st.session_state.get("history_max_turns", Config.history_max_turns)
+    history_mode = st.session_state.get("history_mode", "raw")
+
+    # Fetch summary if needed for this history mode
+    history_summary: str | None = None
+    if history_mode in ("summary", "hybrid"):
+        history_summary = Summarizer.get_summary(identity_id)
 
     # ── If a pre-built preview is available, reuse its payload/context ──
     if preview is not None:
@@ -681,10 +700,12 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
         context_snapshot  = preview["context_snapshot"]
         retrieved_entries = preview["retrieved_entries"]
         # Honour any settings captured at preview time
-        model         = preview.get("model", model)
-        gen           = preview.get("gen", gen)
-        system_prompt = preview.get("system_prompt", system_prompt)
-        prompt_state  = "present" if (system_prompt and system_prompt.strip()) else "empty"
+        model             = preview.get("model", model)
+        gen               = preview.get("gen", gen)
+        system_prompt     = preview.get("system_prompt", system_prompt)
+        prompt_state      = "present" if (system_prompt and system_prompt.strip()) else "empty"
+        history_mode      = preview.get("history_mode", history_mode)
+        history_summary   = preview.get("history_summary", history_summary)
 
     trace: list[dict] = []
     t0 = time.monotonic()
@@ -711,6 +732,7 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
         "identity":           identity_id,
         "prompt_state":       prompt_state,
         "truncation_strategy": "last-n-turns",
+        "history_mode":       history_mode,
         "judge_enabled":      use_judge,
         "judge_model":        judge_model if use_judge else None,
     })
@@ -765,6 +787,8 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
                 memory_block=retrieved_entries,
                 truncation_strategy="last-n-turns",
                 history_max_turns=history_max_turns,
+                history_mode=history_mode,
+                history_summary=history_summary,
             )
             if retrieval is not None:
                 context_snapshot["retrieval_result"] = retrieval.to_display_dict()
@@ -1022,6 +1046,23 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
                 "bg_extractor failed for identity=%s: %s", identity_id, exc
             )
 
+    def _bg_summarizer():
+        """Summarize the full conversation after each turn and persist to MongoDB."""
+        try:
+            import falcon.summarizer as _Summarizer
+            import falcon.config as _Config
+            _Summarizer.update_summary(
+                identity_id=identity_id,
+                history=final_history,
+                model=_Config.summary_model,
+                api_key=_Config.OPENROUTER_API_KEY,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(
+                "bg_summarizer failed for identity=%s: %s", identity_id, exc
+            )
+
     # Log assistant message synchronously first (before threads)
     try:
         Logger.append_message(identity_id, "assistant", response_text, timestamp=asst_ts)
@@ -1034,6 +1075,9 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
     # Audit and token persist in background (no UI dependency)
     threading.Thread(target=_bg_audit,  daemon=True).start()
     threading.Thread(target=_bg_tokens, daemon=True).start()
+
+    # Conversation summarization in background — always runs after each turn
+    threading.Thread(target=_bg_summarizer, daemon=True).start()
 
     # Memory extraction — run synchronously so the Memory tab reflects new
     # entries immediately after st.rerun() (called by _render_chat_tab).
@@ -1078,6 +1122,8 @@ def _handle_clear() -> None:
         "identity_id": identity_id,
         "memory_type": {"$ne": "persona"},
     })
+    # Delete conversation summary
+    Summarizer.delete_summary(identity_id)
     _invalidate_cache(identity_id)
     st.session_state.history        = []
     st.session_state.last_payload   = None
@@ -1947,6 +1993,7 @@ def _confirm_delete_identity_dialog(identity_id: str) -> None:
                 db["memory"].delete_many({"identity_id": identity_id})
                 db["audit_log"].delete_many({"identity_id": identity_id})
                 db["identities"].delete_one({"identity_id": identity_id})
+                Summarizer.delete_summary(identity_id)
             except Exception:
                 pass
             st.session_state.identity_id     = "default"
@@ -2562,6 +2609,50 @@ def main() -> None:
         if new_max_turns == 0:
             st.caption("0 — no history sent to model")
         st.session_state["history_max_turns"] = new_max_turns
+
+        # ── History Mode ──────────────────────────────────────────────────────
+        st.markdown('<div class="sidebar-section-label">History Mode</div>', unsafe_allow_html=True)
+
+        _HISTORY_MODE_OPTIONS = ["raw", "summary", "hybrid"]
+        _HISTORY_MODE_LABELS  = {
+            "raw":     "Raw History",
+            "summary": "Summary",
+            "hybrid":  "Hybrid (Summary + Raw)",
+        }
+        current_history_mode = st.session_state.get("history_mode", "raw")
+        if current_history_mode not in _HISTORY_MODE_OPTIONS:
+            current_history_mode = "raw"
+        history_mode_idx = _HISTORY_MODE_OPTIONS.index(current_history_mode)
+
+        selected_history_mode = st.selectbox(
+            "History Mode",
+            options=_HISTORY_MODE_OPTIONS,
+            index=history_mode_idx,
+            format_func=lambda m: _HISTORY_MODE_LABELS[m],
+            label_visibility="collapsed",
+            key="_history_mode_select",
+        )
+        st.session_state["history_mode"] = selected_history_mode
+
+        if selected_history_mode == "raw":
+            st.caption("Raw — sends the last N conversation turns")
+        elif selected_history_mode == "summary":
+            st.caption("Summary — sends an AI-generated summary of the conversation")
+        else:
+            st.caption("Hybrid — sends summary + the last N raw turns")
+
+        # Show current summary status for non-raw modes
+        if selected_history_mode in ("summary", "hybrid"):
+            _identity_id_sidebar = st.session_state.identity_id
+            _summary_doc = Summarizer.get_summary_doc(_identity_id_sidebar)
+            if _summary_doc:
+                _summary_turns  = _summary_doc.get("turn_count", "?")
+                _summary_updated = _summary_doc.get("updated_at", "")[:19]
+                st.caption(f"✓ Summary ready — {_summary_turns} turns · `{_summary_updated}`")
+                with st.expander("View summary", expanded=False):
+                    st.text(_summary_doc.get("summary", ""))
+            else:
+                st.caption("⚠ No summary yet — send a message to generate one")
 
         # ── Judge ─────────────────────────────────────────────────────────────
         st.markdown('<div class="sidebar-section-label">Judge</div>', unsafe_allow_html=True)

@@ -131,6 +131,13 @@ relevance_weight: 0.6
 extraction_model: "openai/gpt-4o-mini"
 
 # ──────────────────────────────────────────────────────────────────
+# Conversation Summarization
+# summary_model: model used to generate conversation summaries.
+# Use a fast/cheap model. Falls back to default_model if not set.
+# ──────────────────────────────────────────────────────────────────
+summary_model: "deepseek/deepseek-v4-flash"
+
+# ──────────────────────────────────────────────────────────────────
 # Conversation History Truncation (Req 21.1–21.3)
 # history_truncation_strategy: one of
 #   "last-n-turns" | "token-budget" | "summarize-and-compress"

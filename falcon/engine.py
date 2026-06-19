@@ -142,15 +142,26 @@ def build_annotated_payload(
     history_max_turns: int = 20,
     retrieve_fn: Callable | None = None,
     retrieval_kwargs: dict | None = None,
+    history_mode: str = "raw",
+    history_summary: str | None = None,
 ) -> tuple[list[dict], dict]:
     """Assemble and annotate the full payload sent to the model.
 
     Ordering:
         1. Persona block (if persona entry in memory_block)
         2. System prompt (if non-empty/non-whitespace)
-        4. Memory block (non-persona entries as system message)
-        5. Conversation history (truncated)
+        3. Memory block (non-persona entries as system message)
+        4. History summary (for summary and hybrid modes)
+        5. Conversation history turns (raw, for raw and hybrid modes)
         6. Current user input
+
+    Args:
+        history_mode:    One of "raw", "summary", "hybrid".
+            "raw"     - send raw conversation history (truncated to history_max_turns)
+            "summary" - send only AI-generated summary, no raw history turns
+            "hybrid"  - send summary first, then recent raw turns
+        history_summary: Pre-fetched summary text. Used for "summary" and "hybrid" modes.
+                         If None and mode requires summary, the summary block is omitted.
 
     Returns:
         (annotated_payload, context_snapshot)
@@ -163,6 +174,10 @@ def build_annotated_payload(
             f"Invalid truncation_strategy: {truncation_strategy!r}. "
             f"Must be one of: {sorted(_VALID_STRATEGIES)}"
         )
+
+    _VALID_HISTORY_MODES = frozenset({"raw", "summary", "hybrid"})
+    if history_mode not in _VALID_HISTORY_MODES:
+        history_mode = "raw"
 
     annotated: list[dict] = []
     memory_block = memory_block or []
@@ -206,13 +221,26 @@ def build_annotated_payload(
         history = []
         current_input = {}
 
-    # Truncate history
+    # ── History assembly based on history_mode ────────────────────────────
     history_dropped_turns = 0
+    included_history: list[dict] = []
 
-    included_history, history_dropped_turns = _truncate_history_last_n(history, history_max_turns)
+    if history_mode == "raw":
+        # Standard: send truncated raw history turns
+        included_history, history_dropped_turns = _truncate_history_last_n(
+            history, history_max_turns
+        )
+    elif history_mode == "summary":
+        # Summary-only: no raw history turns sent at all
+        included_history = []
+        history_dropped_turns = len(history)
+    elif history_mode == "hybrid":
+        # Hybrid: summary prepended + recent raw turns
+        included_history, history_dropped_turns = _truncate_history_last_n(
+            history, history_max_turns
+        )
 
-    # 1. Persona block — wrapped with a clear instructional header so the
-    # model knows this defines its identity, not just arbitrary context.
+    # 1. Persona block
     if persona_entry is not None:
         raw_persona = persona_entry.get("content", "").strip()
         persona_content = (
@@ -226,8 +254,7 @@ def build_annotated_payload(
             "source":  "persona",
         })
 
-    # 2. System prompt — content is byte-for-byte identical to the user-supplied
-    # string (spec requirement 1.2). The role="system" already signals authority.
+    # 2. System prompt
     if system_prompt and system_prompt.strip():
         annotated.append({
             "role":    "system",
@@ -253,7 +280,19 @@ def build_annotated_payload(
             "source":  "memory",
         })
 
-    # 5. Conversation history
+    # 4. History summary block (for summary and hybrid modes)
+    if history_mode in ("summary", "hybrid") and history_summary and history_summary.strip():
+        annotated.append({
+            "role":    "system",
+            "content": (
+                "[CONVERSATION SUMMARY — condensed record of the conversation so far. "
+                "Use it as context for the current turn.]\n"
+                + history_summary.strip()
+            ),
+            "source":  "history-summary",
+        })
+
+    # 5. Conversation history (raw turns — only in raw and hybrid modes)
     for msg in included_history:
         annotated.append({
             "role":    msg.get("role", "user"),
@@ -289,6 +328,8 @@ def build_annotated_payload(
         "history_included":        [e for e in annotated if e.get("source") == "history"],
         "history_dropped_turns":   history_dropped_turns,
         "truncation_strategy":     truncation_strategy,
+        "history_mode":            history_mode,
+        "history_summary":         history_summary if history_mode in ("summary", "hybrid") else None,
         "current_input":           next((e for e in annotated if e.get("source") == "user-input"), {}),
         "assembled_payload":       assembled_payload,
         "annotated_payload":       annotated,
