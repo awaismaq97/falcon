@@ -48,6 +48,7 @@ import falcon.audit    as Audit
 import falcon.memory   as Memory
 import falcon.judge    as Judge
 import falcon.summarizer as Summarizer
+import falcon.dual_run as DualRun
 from falcon.db import get_db
 from falcon.export_utils import make_export_envelope, to_json_str
 
@@ -293,6 +294,9 @@ def _init_session_state() -> None:
         #   "preview"   → dialog open, waiting for user action
         #   "execute"   → dialog closed, generation about to run this render
         "_send_stage":              None,
+        # Dual-run logging
+        "dual_run_enabled":         False,
+        "dual_run_state_tag":       "Neutral",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1100,6 +1104,51 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
     st.session_state.last_response = response_text
     st.session_state.history       = final_history
     st.session_state.trace_log     = trace
+
+    # ── Dual-run logging (fired after main response is shown + logged) ────
+    if st.session_state.get("dual_run_enabled", False):
+        _state_tag      = st.session_state.get("dual_run_state_tag", "Neutral")
+        _gen_for_dual   = dict(gen)  # snapshot before any mutation
+        _sp_for_dual    = system_prompt
+
+        # Retrieve current persona content for ☀️ detection
+        _persona_content = ""
+        try:
+            _persona_entries = Memory.get_memories(identity_id, memory_type="persona", limit=1)
+            if _persona_entries:
+                _persona_content = _persona_entries[0].get("content", "")
+        except Exception:
+            pass
+
+        def _bg_dual_run():
+            try:
+                record = DualRun.run_dual(
+                    payload=raw_payload,
+                    model=model,
+                    api_key=Config.OPENROUTER_API_KEY,
+                    gen_settings=_gen_for_dual,
+                    identity_id=identity_id,
+                    system_prompt=_sp_for_dual,
+                    state_tag=_state_tag,
+                    user_input=user_input,
+                    persona_content=_persona_content,
+                )
+                DualRun.write_record(record)
+                if record.any_breakthrough:
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "dual_run: BREAKTHROUGH detected for identity=%s state=%s "
+                        "run1_break=%r run2_break=%r",
+                        identity_id, _state_tag,
+                        record.run1_first_break, record.run2_first_break,
+                    )
+            except Exception as exc:
+                import logging as _logging
+                _logging.getLogger(__name__).error(
+                    "bg_dual_run failed for identity=%s: %s", identity_id, exc
+                )
+
+        threading.Thread(target=_bg_dual_run, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -2252,6 +2301,285 @@ def _render_testing_tab() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tab: Dual Run Log
+# ---------------------------------------------------------------------------
+
+# State tag colours (consistent across all renders)
+_STATE_COLORS = {
+    "Neutral":       "#64748b",
+    "Focused":       "#3b82f6",
+    "Coherence":     "#a855f7",
+    "Grief process": "#f59e0b",
+}
+_BREAKTHROUGH_COLOR  = "#ef4444"
+_HELD_COLOR          = "#22c55e"
+
+
+def _render_dual_run_tab() -> None:
+    """Dual Run Log — side-by-side output comparison with breakthrough tracking."""
+    identity_id = st.session_state.identity_id
+
+    st.caption(
+        "Each entry shows both runs of the same message logged side-by-side. "
+        "Breakthrough detection flags any run where the ☀️ instruction was not held."
+    )
+
+    if not st.session_state.get("dual_run_enabled", False):
+        st.info(
+            "Dual run logging is **OFF**. "
+            "Enable it in the sidebar under **Dual Run** to start recording."
+        )
+
+    # ── Controls row ──────────────────────────────────────────────────────
+    col_scope, col_limit, col_filter, col_del = st.columns([1, 1, 1, 1])
+
+    with col_scope:
+        scope = st.selectbox(
+            "Scope",
+            ["This identity", "All identities"],
+            key="_dr_scope",
+            label_visibility="collapsed",
+        )
+    with col_limit:
+        limit = st.number_input(
+            "Limit", min_value=1, max_value=500, value=50,
+            key="_dr_limit", label_visibility="collapsed",
+        )
+    with col_filter:
+        filter_breakthrough = st.selectbox(
+            "Filter",
+            ["All", "Breakthroughs only", "Held only"],
+            key="_dr_filter",
+            label_visibility="collapsed",
+        )
+    with col_del:
+        if st.button("🗑 Delete records", key="_dr_delete_btn",
+                     type="secondary", use_container_width=True):
+            st.session_state["_dr_confirm_delete"] = True
+
+    # ── Delete confirmation ───────────────────────────────────────────────
+    if st.session_state.get("_dr_confirm_delete"):
+        target = "all identities" if scope == "All identities" else f"identity '{identity_id}'"
+        st.markdown(
+            f"<div class='confirm-bar'>⚠️ Permanently delete all dual-run records "
+            f"for {target}?</div>",
+            unsafe_allow_html=True,
+        )
+        dc1, dc2, _ = st.columns([1, 1, 4])
+        with dc1:
+            if st.button("Confirm", type="primary", use_container_width=True,
+                         key="_dr_delete_confirm"):
+                try:
+                    from falcon.db import get_db as _get_db
+                    _db = _get_db()
+                    if scope == "All identities":
+                        _db["dual_run_log"].delete_many({})
+                    else:
+                        DualRun.delete_records(identity_id)
+                    st.session_state["_dr_confirm_delete"] = False
+                    st.success("Records deleted.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Delete failed: {exc}")
+        with dc2:
+            if st.button("Cancel", use_container_width=True, key="_dr_delete_cancel"):
+                st.session_state["_dr_confirm_delete"] = False
+                st.rerun()
+        return
+
+    # ── Fetch records ─────────────────────────────────────────────────────
+    try:
+        if scope == "All identities":
+            records = DualRun.read_all_records(limit=int(limit))
+        else:
+            records = DualRun.read_records(identity_id, limit=int(limit))
+    except Exception as exc:
+        st.error(f"Failed to read dual-run log: {exc}")
+        return
+
+    if not records:
+        st.info("No dual-run records yet. Enable dual run in the sidebar and send a message.")
+        return
+
+    # ── Filter ────────────────────────────────────────────────────────────
+    if filter_breakthrough == "Breakthroughs only":
+        records = [r for r in records if r.get("any_breakthrough")]
+    elif filter_breakthrough == "Held only":
+        records = [r for r in records if not r.get("any_breakthrough")]
+
+    # ── Export ────────────────────────────────────────────────────────────
+    export_env = make_export_envelope(identity_id=identity_id, data=records)
+    st.download_button(
+        label="⬇ Export dual-run log",
+        data=to_json_str(export_env),
+        file_name=f"falcon_dualrun_{identity_id}_{_utc_iso().replace(':','-')}.json",
+        mime="application/json",
+        key="_dr_export_btn",
+    )
+
+    # ── Summary stats ─────────────────────────────────────────────────────
+    total       = len(records)
+    n_bt        = sum(1 for r in records if r.get("any_breakthrough"))
+    n_held      = total - n_bt
+    bt_rate     = f"{100 * n_bt / total:.0f}%" if total else "—"
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("Total runs",      total)
+    sc2.metric("Breakthroughs",   n_bt)
+    sc3.metric("Held",            n_held)
+    sc4.metric("Breakthrough rate", bt_rate)
+
+    # State tag breakdown
+    state_counts: dict[str, int] = {}
+    for r in records:
+        tag = r.get("state_tag", "Unknown")
+        state_counts[tag] = state_counts.get(tag, 0) + 1
+
+    if state_counts:
+        parts = [
+            f"<span style='color:{_STATE_COLORS.get(t, '#94a3b8')};font-family:monospace'>"
+            f"{t}: {n}</span>"
+            for t, n in sorted(state_counts.items())
+        ]
+        st.markdown(
+            "<div style='font-size:0.78rem;margin:4px 0 12px 0'>"
+            + " · ".join(parts) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.caption(f"{total} record{'s' if total != 1 else ''} (newest first)")
+    st.divider()
+
+    # ── Record list ───────────────────────────────────────────────────────
+    for rec in records:
+        ts          = rec.get("recorded_at", "")
+        state_tag   = rec.get("state_tag", "")
+        model       = rec.get("model", "")
+        sun_active  = rec.get("sun_instruction_active", False)
+        any_bt      = rec.get("any_breakthrough", False)
+        user_input  = rec.get("user_input", "")
+        iid         = rec.get("identity_id", identity_id)
+
+        run1        = rec.get("run1", {})
+        run2        = rec.get("run2", {})
+
+        state_color = _STATE_COLORS.get(state_tag, "#94a3b8")
+        bt_icon     = "🔴 BREAKTHROUGH" if any_bt else "🟢 HELD"
+        sun_label   = "☀️ active" if sun_active else "☀️ inactive"
+
+        expander_label = (
+            f"{ts} · "
+            f"[{state_tag}] · "
+            f"{bt_icon if sun_active else '—'} · "
+            f"{model.split('/')[-1][:30]}"
+        )
+
+        with st.expander(expander_label, expanded=False):
+            # Header row
+            h1, h2, h3, h4 = st.columns(4)
+            h1.markdown(
+                f"<span style='color:{state_color};font-weight:700;font-size:0.85rem'>"
+                f"State: {state_tag}</span>",
+                unsafe_allow_html=True,
+            )
+            h2.caption(sun_label)
+            h3.caption(f"Identity: `{iid}`")
+            h4.caption(f"`{model}`")
+
+            # User input
+            st.markdown("**Message sent:**")
+            st.markdown(
+                f"<div style='background:#1a2235;border-radius:8px;padding:8px 12px;"
+                f"font-size:0.85rem;color:#94a3b8;margin-bottom:8px'>"
+                f"{user_input[:400].replace('<','&lt;').replace('>','&gt;')}"
+                f"{'…' if len(user_input) > 400 else ''}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # System prompt preview
+            sp = rec.get("system_prompt", "")
+            if sp:
+                with st.expander("System prompt", expanded=False):
+                    st.code(sp[:600], language=None)
+
+            st.divider()
+
+            # Side-by-side run outputs
+            col_r1, col_r2 = st.columns(2)
+
+            def _render_run_col(col, run_data: dict, run_label: str):
+                broke  = run_data.get("broke_through", False)
+                fb     = run_data.get("first_break", "")
+                tokens = run_data.get("tokens") or {}
+                lat    = run_data.get("latency_ms", 0)
+                ts_run = run_data.get("timestamp", "")
+                text   = run_data.get("text", "")
+
+                if sun_active:
+                    status_color = _BREAKTHROUGH_COLOR if broke else _HELD_COLOR
+                    status_label = "BROKE THROUGH" if broke else "HELD"
+                else:
+                    status_color = "#64748b"
+                    status_label = "☀️ not active"
+
+                with col:
+                    st.markdown(
+                        f"<div style='font-size:0.72rem;font-weight:700;color:{status_color};"
+                        f"font-family:monospace;text-transform:uppercase;margin-bottom:4px'>"
+                        f"{run_label} — {status_label}</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    if sun_active and broke and fb:
+                        st.markdown(
+                            f"<div style='background:#2d1515;border:1px solid {_BREAKTHROUGH_COLOR};"
+                            f"border-radius:6px;padding:6px 10px;font-size:0.78rem;"
+                            f"color:{_BREAKTHROUGH_COLOR};margin-bottom:6px'>"
+                            f"First break: <code>{fb}</code>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    # Token / latency row
+                    st.caption(
+                        f"`{tokens.get('completion_tokens','?')} out` · "
+                        f"`{tokens.get('total_tokens','?')} total` · "
+                        f"`{lat}ms` · `{ts_run}`"
+                    )
+
+                    # Output text
+                    st.markdown(
+                        f"<div style='background:#161b27;border:1px solid #1e2535;"
+                        f"border-radius:8px;padding:10px 14px;font-size:0.88rem;"
+                        f"color:#cbd5e1;line-height:1.6;white-space:pre-wrap;min-height:60px'>"
+                        f"{text[:800].replace('<','&lt;').replace('>','&gt;')}"
+                        f"{'…' if len(text) > 800 else ''}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            _render_run_col(col_r1, run1, "Run 1")
+            _render_run_col(col_r2, run2, "Run 2")
+
+            # Token comparison summary
+            st.divider()
+            tc1, tc2, tc3 = st.columns(3)
+            r1_tok = run1.get("tokens") or {}
+            r2_tok = run2.get("tokens") or {}
+            tc1.metric("Run 1 tokens",  r1_tok.get("total_tokens", "?"))
+            tc2.metric("Run 2 tokens",  r2_tok.get("total_tokens", "?"))
+            tc3.metric(
+                "Run 1 latency / Run 2 latency",
+                f"{run1.get('latency_ms','?')}ms / {run2.get('latency_ms','?')}ms",
+            )
+
+            # Full raw JSON (collapsed)
+            with st.expander("Raw JSON", expanded=False):
+                st.json(rec)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -2759,6 +3087,36 @@ def main() -> None:
             f"`R={gen_now['repetition_penalty']}`"
         )
 
+        # ── Dual Run ──────────────────────────────────────────────────────────
+        st.markdown('<div class="sidebar-section-label">Dual Run</div>', unsafe_allow_html=True)
+
+        dual_run_enabled = st.checkbox(
+            "Dual run logging",
+            value=st.session_state.get("dual_run_enabled", False),
+            key="_dual_run_checkbox",
+        )
+        st.session_state.dual_run_enabled = dual_run_enabled
+
+        if dual_run_enabled:
+            st.caption("ON — each message runs twice, both outputs logged")
+
+            _STATE_OPTIONS = ["Neutral", "Focused", "Coherence", "Grief process"]
+            current_state = st.session_state.get("dual_run_state_tag", "Neutral")
+            if current_state not in _STATE_OPTIONS:
+                current_state = "Neutral"
+
+            selected_state = st.selectbox(
+                "State",
+                options=_STATE_OPTIONS,
+                index=_STATE_OPTIONS.index(current_state),
+                label_visibility="collapsed",
+                key="_dual_run_state_select",
+            )
+            st.session_state.dual_run_state_tag = selected_state
+            st.caption(f"State: **{selected_state}**")
+        else:
+            st.caption("OFF — single inference per message")
+
         # ── Session Stats ─────────────────────────────────────────────────────
         st.markdown('<div class="sidebar-section-label">Session</div>', unsafe_allow_html=True)
         tok       = st.session_state.session_tokens
@@ -2804,8 +3162,8 @@ def main() -> None:
     _bg_poller()
 
     # ── Main tabs ─────────────────────────────────────────────────────────────
-    tab_chat, tab_context, tab_memory, tab_audit, tab_logs, tab_testing = st.tabs(
-        ["Chat", "Context", "Memory", "Audit", "Logs", "Testing"]
+    tab_chat, tab_context, tab_memory, tab_audit, tab_logs, tab_testing, tab_dualrun = st.tabs(
+        ["Chat", "Context", "Memory", "Audit", "Logs", "Testing", "Dual Run"]
     )
 
     with tab_chat:
@@ -2825,6 +3183,9 @@ def main() -> None:
 
     with tab_testing:
         _render_testing_tab()
+
+    with tab_dualrun:
+        _render_dual_run_tab()
 
 
 if __name__ == "__main__":

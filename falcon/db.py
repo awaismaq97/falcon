@@ -72,4 +72,8 @@ def _make_db() -> Database:
     db["memory"].create_index([("identity_id", 1), ("pinned", -1)])
     # Conversation summary index
     db["conversation_summaries"].create_index("identity_id", unique=True)
+    # Dual-run log indexes
+    db["dual_run_log"].create_index("identity_id")
+    db["dual_run_log"].create_index("recorded_at")
+    db["dual_run_log"].create_index([("identity_id", 1), ("state_tag", 1)])
     return db
