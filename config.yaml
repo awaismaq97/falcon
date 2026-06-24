@@ -1,4 +1,4 @@
-default_model: "deepseek/deepseek-v4-flash"
+default_model: "mistralai/mistral-large"
 
 available_models:
   - "qwen/qwen-2.5-72b-instruct"
