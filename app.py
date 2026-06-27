@@ -130,9 +130,14 @@ def _cache_key_messages(identity_id: str) -> str:
 def _cache_key_traces(identity_id: str) -> str:
     return f"_cache_traces_{identity_id}"
 
+def _cache_key_trace_index(identity_id: str) -> str:
+    """Lightweight trace index cache — timestamps only, no steps/context."""
+    return f"_cache_trace_idx_{identity_id}"
+
 def _invalidate_cache(identity_id: str) -> None:
     st.session_state.pop(_cache_key_messages(identity_id), None)
     st.session_state.pop(_cache_key_traces(identity_id), None)
+    st.session_state.pop(_cache_key_trace_index(identity_id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -174,33 +179,114 @@ def _save_entries(identity_id: str, entries: list[dict]) -> None:
 # Trace helpers
 # ---------------------------------------------------------------------------
 
+def _read_trace_index(identity_id: str) -> dict[str, bool]:
+    """Return a cheap set of user_timestamps that have traces.
+
+    Fetches only the user_timestamp field — no steps, no context_snapshot.
+    Used by the chat tab to decide whether to show the ⌥ context button,
+    and to build trace_by_ts lazily when a button is clicked.
+
+    Returns:
+        Dict mapping user_timestamp → True for all traces that exist.
+    """
+    key = _cache_key_trace_index(identity_id)
+    if key not in st.session_state:
+        db = get_db()
+        cursor = db["traces"].find(
+            {"identity_id": identity_id},
+            {"_id": 0, "user_timestamp": 1},   # project only timestamp
+        )
+        st.session_state[key] = {doc["user_timestamp"]: True for doc in cursor}
+    return st.session_state[key]
+
+
 def _read_traces(identity_id: str) -> list[dict]:
+    """Return all full trace documents for identity_id (Logs tab use only).
+
+    Loads the complete steps + context_snapshot for every trace.
+    Results are cached in session state and only fetched once per identity
+    switch. Cap at 500 to prevent unbounded reads on very long conversations.
+    """
     key = _cache_key_traces(identity_id)
     if key not in st.session_state:
         db     = get_db()
-        cursor = db["traces"].find(
-            {"identity_id": identity_id},
-            {"_id": 0, "identity_id": 0},
+        cursor = (
+            db["traces"]
+            .find(
+                {"identity_id": identity_id},
+                {"_id": 0, "identity_id": 0},
+            )
+            .sort("user_timestamp", 1)
+            .limit(500)
         )
         st.session_state[key] = list(cursor)
     return st.session_state[key]
 
 
+def _fetch_trace_steps(identity_id: str, user_ts: str) -> list[dict] | None:
+    """Fetch the steps for one specific trace by user_timestamp.
+
+    Used when a user clicks ⌥ context or Trace — fetches only that one
+    document rather than loading all traces. Falls back to the full cache
+    if it's already loaded.
+    """
+    # Check full cache first (already paid the cost)
+    full_key = _cache_key_traces(identity_id)
+    if full_key in st.session_state:
+        for t in st.session_state[full_key]:
+            if t.get("user_timestamp") == user_ts:
+                return t.get("steps")
+        return None
+
+    # Single-document fetch
+    db  = get_db()
+    doc = db["traces"].find_one(
+        {"identity_id": identity_id, "user_timestamp": user_ts},
+        {"_id": 0, "steps": 1},
+    )
+    return doc.get("steps") if doc else None
+
+
+def _fetch_trace_payload(identity_id: str, user_ts: str) -> list[dict] | None:
+    """Fetch the payload for one trace (for the ⌥ context dialog)."""
+    steps = _fetch_trace_steps(identity_id, user_ts)
+    if not steps:
+        return None
+    for step in steps:
+        if step.get("stage") == "payload built":
+            data = step.get("data", {})
+            if isinstance(data, dict):
+                return data.get("payload")
+    return None
+
+
 def _append_trace(identity_id: str, snapshot: dict) -> None:
     db = get_db()
     db["traces"].insert_one({"identity_id": identity_id, **snapshot})
-    key = _cache_key_traces(identity_id)
-    if key in st.session_state:
-        st.session_state[key].append(snapshot)
+    # Update lightweight index
+    idx_key = _cache_key_trace_index(identity_id)
+    if idx_key in st.session_state:
+        ts = snapshot.get("user_timestamp")
+        if ts:
+            st.session_state[idx_key][ts] = True
+    # Update full cache if already loaded
+    full_key = _cache_key_traces(identity_id)
+    if full_key in st.session_state:
+        st.session_state[full_key].append(snapshot)
 
 
 def _delete_trace_for_timestamp(identity_id: str, user_ts: str) -> None:
     db = get_db()
     db["traces"].delete_one({"identity_id": identity_id, "user_timestamp": user_ts})
-    key = _cache_key_traces(identity_id)
-    if key in st.session_state:
-        st.session_state[key] = [
-            t for t in st.session_state[key]
+    # Remove from lightweight index
+    idx_key = _cache_key_trace_index(identity_id)
+    if idx_key in st.session_state:
+        st.session_state[idx_key].pop(user_ts, None)
+    # Remove from full cache if loaded
+    full_key = _cache_key_traces(identity_id)
+    if full_key in st.session_state:
+        st.session_state[full_key] = [
+            t for t in st.session_state[full_key]
             if t.get("user_timestamp") != user_ts
         ]
 
@@ -1191,23 +1277,10 @@ def _handle_clear() -> None:
 def _render_chat_tab(user_input: str | None) -> None:
     history     = st.session_state.history
     identity_id = st.session_state.identity_id
-    traces      = _read_traces(identity_id)
-    trace_by_ts: dict[str, list[dict]] = {
-        t["user_timestamp"]: t["steps"]
-        for t in traces
-        if "user_timestamp" in t
-    }
 
-    def _payload_for_ts(user_ts: str) -> list[dict] | None:
-        steps = trace_by_ts.get(user_ts)
-        if not steps:
-            return None
-        for step in steps:
-            if step.get("stage") == "payload built":
-                data = step.get("data", {})
-                if isinstance(data, dict):
-                    return data.get("payload")
-        return None
+    # Use the lightweight trace index (timestamps only) for rendering buttons.
+    # Full trace steps are fetched lazily on click via _fetch_trace_payload().
+    trace_index = _read_trace_index(identity_id)  # {user_timestamp: True}
 
     # Empty state
     if not history and not user_input:
@@ -1236,8 +1309,7 @@ def _render_chat_tab(user_input: str | None) -> None:
                     st.markdown(asst.get("content", ""))
 
                 user_ts = entry.get("timestamp", "")
-                payload = _payload_for_ts(user_ts)
-                if payload is not None:
+                if user_ts in trace_index:
                     btn_key = f"_chat_payload_{user_ts.replace(':', '').replace('.', '')}"
                     if st.button(
                         "⌥ context",
@@ -1254,10 +1326,10 @@ def _render_chat_tab(user_input: str | None) -> None:
                     st.markdown(entry.get("content", ""))
                 i += 1
 
-        # Context dialog trigger
+        # Context dialog trigger — fetch only this one trace on click
         if st.session_state.get("_view_payload_ts") is not None:
             vts     = st.session_state._view_payload_ts
-            payload = _payload_for_ts(vts)
+            payload = _fetch_trace_payload(identity_id, vts)
             if payload is not None:
                 _show_payload_dialog(payload)
             st.session_state._view_payload_ts = None
@@ -1805,12 +1877,12 @@ def _render_logs_tab() -> None:
     st.caption(f"**Traces:** `mongodb://falcon/traces` · identity `{identity_id}`")
 
     entries = _read_log_entries(identity_id)
-    traces  = _read_traces(identity_id)
-    trace_by_ts: dict[str, list[dict]] = {
-        t["user_timestamp"]: t["steps"]
-        for t in traces
-        if "user_timestamp" in t
-    }
+    # Lightweight index for button availability — avoids loading full trace docs
+    # just to decide whether the Trace button should be enabled or disabled.
+    trace_index = _read_trace_index(identity_id)
+    # Full traces only fetched if user opens structured tab and the full data
+    # is actually needed for the dialog. Use lazy helper for trace dialog.
+    traces = _read_traces(identity_id)
 
     st.caption(
         f"**Entries:** {len(entries) if entries is not None else 'parse error'} "
@@ -1879,7 +1951,7 @@ def _render_logs_tab() -> None:
         for p_num, raw_idxs, is_pair in pairs:
             ts_label   = entries[raw_idxs[0]].get("timestamp", "")
             user_ts    = entries[raw_idxs[0]].get("timestamp", "")
-            turn_trace = trace_by_ts.get(user_ts)
+            has_trace  = user_ts in trace_index
 
             user_q = entries[raw_idxs[0]].get("content", "")
             user_q_preview = " ".join(user_q.split())
@@ -1940,7 +2012,7 @@ def _render_logs_tab() -> None:
                         st.session_state._confirm_pair = p_num
                         st.rerun()
                 with trace_col:
-                    if turn_trace:
+                    if has_trace:
                         if st.button("Trace", key=f"_trace_{p_num}", use_container_width=True):
                             st.session_state._view_trace_ts = user_ts
                             st.rerun()
@@ -1950,7 +2022,7 @@ def _render_logs_tab() -> None:
 
         if st.session_state.get("_view_trace_ts") is not None:
             vts      = st.session_state._view_trace_ts
-            vt_steps = trace_by_ts.get(vts)
+            vt_steps = _fetch_trace_steps(identity_id, vts)
             if vt_steps:
                 _show_trace_dialog(vts, vt_steps)
             st.session_state._view_trace_ts = None

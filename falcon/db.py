@@ -53,15 +53,21 @@ def _make_db() -> Database:
         )
     client = MongoClient(
         uri,
-        # Keep the connection alive; don't wait more than 5 s to connect.
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=5000,
-        socketTimeoutMS=10000,
+        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=10000,
+        # Generous socket timeout — traces and messages can be large.
+        # Atlas free/shared tier can be slow under load; 60s avoids spurious
+        # timeouts on legitimate reads of growing collections.
+        socketTimeoutMS=60000,
     )
     db = client["falcon"]
     # Ensure indexes exist (no-op if already present)
     db["messages"].create_index("identity_id")
+    # Compound index so history reads sort by insertion order without a scan
+    db["messages"].create_index([("identity_id", 1), ("_id", 1)])
     db["traces"].create_index("identity_id")
+    # Compound index for the user_timestamp lookup used in chat rendering
+    db["traces"].create_index([("identity_id", 1), ("user_timestamp", 1)])
     db["tokens"].create_index("identity_id", unique=True)
     # Audit trail indexes
     db["audit_log"].create_index("identity_id")

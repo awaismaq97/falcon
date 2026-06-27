@@ -87,20 +87,22 @@ def create_identity(identity_id: str) -> None:
     )
 
 
-def load_history(identity_id: str) -> list[dict]:
+def load_history(identity_id: str, limit: int = 2000) -> list[dict]:
     """Return the message history for identity_id in chronological order.
 
     Behaviour:
     - Validates identity_id for path-traversal characters.
     - Returns an empty list [] if no messages exist for this identity.
-    - Returns entries in insertion order (natural MongoDB order), which is
-      the same chronological order the previous file-based logger used.
+    - Sorts by _id ascending (insertion order, index-backed via the
+      compound (identity_id, _id) index created in db.py).
+    - Capped at `limit` to prevent unbounded reads on large histories.
     - Each entry is a plain dict with keys: timestamp, role, content.
       The MongoDB _id field is stripped so the shape is identical to the
       old JSON format callers expect.
 
     Args:
         identity_id: The identity whose history to load.
+        limit: Maximum number of messages to return (default 2000).
 
     Returns:
         A list of {timestamp, role, content} dicts in chronological order.
@@ -111,9 +113,14 @@ def load_history(identity_id: str) -> list[dict]:
     _validate_identity_id(identity_id)
 
     db = get_db()
-    cursor = db["messages"].find(
-        {"identity_id": identity_id},
-        {"_id": 0, "identity_id": 0},   # strip internal fields
+    cursor = (
+        db["messages"]
+        .find(
+            {"identity_id": identity_id},
+            {"_id": 0, "identity_id": 0},   # strip internal fields
+        )
+        .sort("_id", 1)   # ascending insertion order, uses (identity_id, _id) index
+        .limit(limit)
     )
     return list(cursor)
 
