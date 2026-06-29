@@ -2675,24 +2675,43 @@ def main() -> None:
     [data-testid="stMain"] {
         background: #ffffff;
     }
-    /* Main content area text */
-    [data-testid="stMain"] p,
-    [data-testid="stMain"] span,
-    [data-testid="stMain"] label,
-    [data-testid="stMain"] div {
-        color: #111111;
-    }
 
     /* ── Sidebar ── */
     [data-testid="stSidebar"] {
-        background: #f9f9f9;
+        background: #f9f9f9 !important;
         border-right: 1px solid #e5e5e5;
+        min-width: 240px;
     }
+
+    /* Make sidebar text dark and readable */
     [data-testid="stSidebar"] p,
     [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] div,
-    [data-testid="stSidebar"] .stMarkdown {
+    [data-testid="stSidebar"] label {
+        color: #111111 !important;
+    }
+
+    /* ── Sidebar collapse/expand arrow — must always be visible ── */
+    [data-testid="stSidebarCollapsedControl"] {
+        background: #f9f9f9 !important;
+        border: 1px solid #e5e5e5 !important;
+        border-radius: 0 6px 6px 0 !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="stSidebarCollapsedControl"] button {
+        color: #111111 !important;
+        fill: #111111 !important;
+    }
+    /* The expand arrow on the main content side */
+    [data-testid="stSidebarNavCollapseButton"] svg,
+    [data-testid="collapsedControl"] svg {
+        color: #111111 !important;
+        fill: #111111 !important;
+    }
+    button[data-testid="stBaseButton-headerNoPadding"] {
+        color: #111111 !important;
+    }
+    button[data-testid="stBaseButton-headerNoPadding"] svg {
+        fill: #111111 !important;
         color: #111111 !important;
     }
 
@@ -2746,7 +2765,7 @@ def main() -> None:
         padding: 12px 16px !important;
         margin: 6px 0 !important;
     }
-    /* Assistant bubble — white, no background */
+    /* Assistant bubble — white */
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
         background: #ffffff !important;
         border-radius: 12px !important;
@@ -2909,11 +2928,6 @@ def main() -> None:
     }
     [data-testid="stCode"] code {
         color: #111111 !important;
-    }
-
-    /* ── Info / warning / error boxes ── */
-    [data-testid="stAlert"] {
-        border-radius: 10px !important;
     }
 
     /* ── Divider ── */
