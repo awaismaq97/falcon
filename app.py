@@ -2657,7 +2657,12 @@ def _render_dual_run_tab() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    st.set_page_config(page_title="Falcon", layout="wide", page_icon="🦅")
+    st.set_page_config(
+        page_title="Falcon",
+        layout="wide",
+        page_icon="🦅",
+        initial_sidebar_state="expanded",
+    )
     _init_session_state()
 
     # ── Global CSS ────────────────────────────────────────────────────────────
