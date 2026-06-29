@@ -485,11 +485,11 @@ def _render_context_view(cv: dict) -> None:
 
             st.markdown(
                 f"<div style='border-left:3px solid {color};padding:6px 12px;"
-                f"margin:4px 0;background:#161b27;border-radius:4px'>"
+                f"margin:4px 0;background:#f9f9f9;border-radius:4px'>"
                 f"<span style='color:{color};font-size:0.72rem;font-weight:600;"
                 f"font-family:monospace;text-transform:uppercase'>{label}</span>"
-                f"<span style='color:#475569;font-size:0.72rem;margin-left:8px'>{role}</span>"
-                f"<div style='color:#cbd5e1;font-size:0.83rem;margin-top:4px'>{preview}</div>"
+                f"<span style='color:#6b7280;font-size:0.72rem;margin-left:8px'>{role}</span>"
+                f"<div style='color:#111111;font-size:0.83rem;margin-top:4px'>{preview}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -497,9 +497,9 @@ def _render_context_view(cv: dict) -> None:
         # Dropped-turn placeholder (Req 21.8)
         if history_dropped and history_dropped > 0:
             st.markdown(
-                f"<div style='border-left:3px solid #374151;padding:6px 12px;"
-                f"margin:4px 0;background:#111827;border-radius:4px;"
-                f"color:#6b7280;font-style:italic;font-size:0.82rem'>"
+                f"<div style='border-left:3px solid #d1d5db;padding:6px 12px;"
+                f"margin:4px 0;background:#f4f4f4;border-radius:4px;"
+                f"color:#9ca3af;font-style:italic;font-size:0.82rem'>"
                 f"▸ [{history_dropped} turn{'s' if history_dropped != 1 else ''} truncated]"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -661,13 +661,13 @@ def _render_send_preview_inline(preview: dict) -> None:
     dropped   = preview.get("context_snapshot", {}).get("history_dropped_turns", 0)
 
     st.markdown(
-        "<div style='border:1px solid #2d3748;border-radius:12px;"
-        "background:#0d1117;padding:18px 20px;margin:12px 0'>",
+        "<div style='border:1px solid #e5e5e5;border-radius:12px;"
+        "background:#f9f9f9;padding:18px 20px;margin:12px 0'>",
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        "<span style='color:#f59e0b;font-size:0.72rem;font-weight:700;"
+        "<span style='color:#374151;font-size:0.72rem;font-weight:700;"
         "font-family:monospace;text-transform:uppercase;letter-spacing:0.08em'>"
         "⬡ PAYLOAD REVIEW — review before sending</span>",
         unsafe_allow_html=True,
@@ -690,18 +690,19 @@ def _render_send_preview_inline(preview: dict) -> None:
     # Annotated payload — colour-coded by source
     for elem in annotated:
         src          = elem.get("source", "history")
-        color        = _SOURCE_COLORS.get(src, "#64748b")
+        color        = _SOURCE_COLORS.get(src, "#6b7280")
         label        = _SOURCE_LABELS.get(src, src)
         role         = elem.get("role", "")
         content      = elem.get("content", "")
         preview_text = content[:400] + ("…" if len(content) > 400 else "")
         st.markdown(
             f"<div style='border-left:3px solid {color};padding:6px 12px;"
-            f"margin:4px 0;background:#161b27;border-radius:4px'>"
+            f"margin:4px 0;background:#ffffff;border-radius:4px;"
+            f"border:1px solid #e5e5e5;border-left:3px solid {color}'>"
             f"<span style='color:{color};font-size:0.70rem;font-weight:600;"
             f"font-family:monospace;text-transform:uppercase'>{label}</span>"
-            f"<span style='color:#475569;font-size:0.70rem;margin-left:8px'>{role}</span>"
-            f"<div style='color:#cbd5e1;font-size:0.82rem;margin-top:4px;"
+            f"<span style='color:#6b7280;font-size:0.70rem;margin-left:8px'>{role}</span>"
+            f"<div style='color:#111111;font-size:0.82rem;margin-top:4px;"
             f"white-space:pre-wrap'>{preview_text}</div>"
             f"</div>",
             unsafe_allow_html=True,
@@ -709,9 +710,9 @@ def _render_send_preview_inline(preview: dict) -> None:
 
     if dropped:
         st.markdown(
-            f"<div style='border-left:3px solid #374151;padding:6px 12px;"
-            f"margin:4px 0;background:#111827;border-radius:4px;"
-            f"color:#6b7280;font-style:italic;font-size:0.82rem'>"
+            f"<div style='border-left:3px solid #d1d5db;padding:6px 12px;"
+            f"margin:4px 0;background:#f4f4f4;border-radius:4px;"
+            f"color:#9ca3af;font-style:italic;font-size:0.82rem'>"
             f"▸ [{dropped} turn{'s' if dropped != 1 else ''} truncated from history]"
             f"</div>",
             unsafe_allow_html=True,
@@ -2350,9 +2351,9 @@ def _render_testing_tab() -> None:
                         st.caption(token_str)
 
                     st.markdown(
-                        f"<div style='background:#161b27;border:1px solid #1e2535;"
+                        f"<div style='background:#f9f9f9;border:1px solid #e5e5e5;"
                         f"border-radius:8px;padding:10px 14px;font-size:0.85rem;"
-                        f"color:#cbd5e1;line-height:1.6;white-space:pre-wrap'>"
+                        f"color:#111111;line-height:1.6;white-space:pre-wrap'>"
                         f"{response[:600].replace('<','&lt;').replace('>','&gt;')}"
                         f"{'…' if len(response) > 600 else ''}"
                         f"</div>",
@@ -2509,7 +2510,7 @@ def _render_dual_run_tab() -> None:
 
     if state_counts:
         parts = [
-            f"<span style='color:{_STATE_COLORS.get(t, '#94a3b8')};font-family:monospace'>"
+            f"<span style='color:{_STATE_COLORS.get(t, '#6b7280')};font-family:monospace'>"
             f"{t}: {n}</span>"
             for t, n in sorted(state_counts.items())
         ]
@@ -2535,7 +2536,7 @@ def _render_dual_run_tab() -> None:
         run1        = rec.get("run1", {})
         run2        = rec.get("run2", {})
 
-        state_color = _STATE_COLORS.get(state_tag, "#94a3b8")
+        state_color = _STATE_COLORS.get(state_tag, "#6b7280")
         bt_icon     = "🔴 BREAKTHROUGH" if any_bt else "🟢 HELD"
         sun_label   = "☀️ active" if sun_active else "☀️ inactive"
 
@@ -2561,8 +2562,8 @@ def _render_dual_run_tab() -> None:
             # User input
             st.markdown("**Message sent:**")
             st.markdown(
-                f"<div style='background:#1a2235;border-radius:8px;padding:8px 12px;"
-                f"font-size:0.85rem;color:#94a3b8;margin-bottom:8px'>"
+                f"<div style='background:#f4f4f4;border-radius:8px;padding:8px 12px;"
+                f"font-size:0.85rem;color:#374151;margin-bottom:8px'>"
                 f"{user_input[:400].replace('<','&lt;').replace('>','&gt;')}"
                 f"{'…' if len(user_input) > 400 else ''}"
                 f"</div>",
@@ -2622,9 +2623,9 @@ def _render_dual_run_tab() -> None:
 
                     # Output text
                     st.markdown(
-                        f"<div style='background:#161b27;border:1px solid #1e2535;"
+                        f"<div style='background:#f9f9f9;border:1px solid #e5e5e5;"
                         f"border-radius:8px;padding:10px 14px;font-size:0.88rem;"
-                        f"color:#cbd5e1;line-height:1.6;white-space:pre-wrap;min-height:60px'>"
+                        f"color:#111111;line-height:1.6;white-space:pre-wrap;min-height:60px'>"
                         f"{text[:800].replace('<','&lt;').replace('>','&gt;')}"
                         f"{'…' if len(text) > 800 else ''}"
                         f"</div>",
@@ -2662,127 +2663,274 @@ def main() -> None:
     # ── Global CSS ────────────────────────────────────────────────────────────
     st.markdown("""
     <style>
-    [data-testid="stAppViewContainer"] { background: #0f1117; }
-    [data-testid="stSidebar"] {
-        background: #161b27;
-        border-right: 1px solid #1e2535;
+    /* ── Base ── */
+    [data-testid="stAppViewContainer"] {
+        background: #ffffff;
     }
+    [data-testid="stMain"] {
+        background: #ffffff;
+    }
+    /* Main content area text */
+    [data-testid="stMain"] p,
+    [data-testid="stMain"] span,
+    [data-testid="stMain"] label,
+    [data-testid="stMain"] div {
+        color: #111111;
+    }
+
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] {
+        background: #f9f9f9;
+        border-right: 1px solid #e5e5e5;
+    }
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] div,
+    [data-testid="stSidebar"] .stMarkdown {
+        color: #111111 !important;
+    }
+
     #MainMenu, footer, header { visibility: hidden; }
     [data-testid="stDecoration"] { display: none; }
 
+    /* ── Sidebar header ── */
     .falcon-header {
         display: flex; align-items: center; gap: 10px;
         padding: 18px 4px 10px 4px;
-        border-bottom: 1px solid #1e2535; margin-bottom: 4px;
+        border-bottom: 1px solid #e5e5e5;
+        margin-bottom: 4px;
     }
     .falcon-header h1 {
-        font-size: 1.35rem; font-weight: 700; color: #e2e8f0;
+        font-size: 1.35rem; font-weight: 700; color: #111111;
         margin: 0; letter-spacing: 0.02em;
     }
 
-    [data-testid="stChatMessage"] {
-        background: transparent !important; border: none !important; padding: 4px 0 !important;
-    }
-    [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p {
-        color: #cbd5e1; line-height: 1.65; font-size: 0.95rem;
-    }
-    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-        background: #1a2235 !important; border-radius: 12px !important;
-        padding: 12px 16px !important; margin: 6px 0 !important;
-    }
-    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
-        background: transparent !important; border-radius: 12px !important;
-        padding: 8px 4px !important; margin: 4px 0 !important;
-    }
-
-    [data-testid="stBottom"] {
-        background: #0f1117; border-top: 1px solid #1e2535; padding: 10px 0 6px 0;
-    }
-    [data-testid="stChatInput"] textarea {
-        background: #161b27 !important; border: 1px solid #2d3748 !important;
-        border-radius: 10px !important; color: #e2e8f0 !important;
-        font-size: 0.93rem !important; padding: 12px 16px !important;
-    }
-    [data-testid="stChatInput"] textarea:focus {
-        border-color: #3b82f6 !important;
-        box-shadow: 0 0 0 3px rgba(59,130,246,0.12) !important;
-    }
-
-    .clear-btn button {
-        background: transparent !important; border: 1px solid #2d3748 !important;
-        color: #64748b !important; border-radius: 8px !important;
-        font-size: 0.78rem !important; padding: 4px 14px !important;
-    }
-    .clear-btn button:hover {
-        border-color: #ef4444 !important; color: #ef4444 !important;
-        background: rgba(239,68,68,0.06) !important;
-    }
-
-    .confirm-bar {
-        background: #1e1a0f; border: 1px solid #78350f;
-        border-radius: 10px; padding: 12px 16px; margin: 8px 0;
-    }
-
-    [data-testid="stTabs"] [data-baseweb="tab-list"] {
-        background: transparent; border-bottom: 1px solid #1e2535; gap: 0;
-    }
-    [data-testid="stTabs"] [data-baseweb="tab"] {
-        background: transparent !important; color: #64748b !important;
-        font-size: 0.85rem !important; font-weight: 500 !important;
-        padding: 8px 20px !important; border-bottom: 2px solid transparent !important;
-    }
-    [data-testid="stTabs"] [aria-selected="true"] {
-        color: #e2e8f0 !important; border-bottom: 2px solid #3b82f6 !important;
-    }
-
+    /* ── Sidebar section labels ── */
     .sidebar-section-label {
         font-size: 0.68rem; font-weight: 600; letter-spacing: 0.08em;
-        text-transform: uppercase; color: #475569; margin: 14px 0 6px 0;
-    }
-    .token-row {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 3px 0; font-size: 0.8rem; color: #64748b;
-    }
-    .token-row span.val { font-family: monospace; color: #94a3b8; }
-
-    [data-testid="stSelectbox"] > div > div,
-    [data-testid="stTextInput"] input {
-        background: #1e2535 !important; border: 1px solid #2d3748 !important;
-        border-radius: 8px !important; color: #e2e8f0 !important; font-size: 0.85rem !important;
+        text-transform: uppercase; color: #6b7280; margin: 14px 0 6px 0;
     }
 
+    /* ── Sidebar inputs ── */
+    [data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div,
+    [data-testid="stSidebar"] [data-testid="stTextInput"] input,
+    [data-testid="stSidebar"] textarea {
+        background: #ffffff !important;
+        border: 1px solid #d1d5db !important;
+        border-radius: 8px !important;
+        color: #111111 !important;
+        font-size: 0.85rem !important;
+    }
+
+    /* ── Chat messages ── */
+    [data-testid="stChatMessage"] {
+        background: transparent !important;
+        border: none !important;
+        padding: 4px 0 !important;
+    }
+    [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"] p {
+        color: #111111;
+        line-height: 1.7;
+        font-size: 0.95rem;
+    }
+    /* User bubble — light grey like ChatGPT */
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+        background: #f4f4f4 !important;
+        border-radius: 12px !important;
+        padding: 12px 16px !important;
+        margin: 6px 0 !important;
+    }
+    /* Assistant bubble — white, no background */
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
+        background: #ffffff !important;
+        border-radius: 12px !important;
+        padding: 8px 4px !important;
+        margin: 4px 0 !important;
+    }
+
+    /* ── Chat input bar ── */
+    [data-testid="stBottom"] {
+        background: #ffffff;
+        border-top: 1px solid #e5e5e5;
+        padding: 10px 0 6px 0;
+    }
+    [data-testid="stChatInput"] textarea {
+        background: #f9f9f9 !important;
+        border: 1px solid #d1d5db !important;
+        border-radius: 12px !important;
+        color: #111111 !important;
+        font-size: 0.93rem !important;
+        padding: 12px 16px !important;
+    }
+    [data-testid="stChatInput"] textarea:focus {
+        border-color: #111111 !important;
+        box-shadow: 0 0 0 2px rgba(0,0,0,0.08) !important;
+    }
+
+    /* ── Tabs ── */
+    [data-testid="stTabs"] [data-baseweb="tab-list"] {
+        background: transparent;
+        border-bottom: 1px solid #e5e5e5;
+        gap: 0;
+    }
+    [data-testid="stTabs"] [data-baseweb="tab"] {
+        background: transparent !important;
+        color: #6b7280 !important;
+        font-size: 0.85rem !important;
+        font-weight: 500 !important;
+        padding: 8px 20px !important;
+        border-bottom: 2px solid transparent !important;
+    }
+    [data-testid="stTabs"] [aria-selected="true"] {
+        color: #111111 !important;
+        border-bottom: 2px solid #111111 !important;
+    }
+
+    /* ── Expanders ── */
     [data-testid="stExpander"] {
-        background: #161b27 !important; border: 1px solid #1e2535 !important;
-        border-radius: 10px !important; margin-bottom: 6px !important;
+        background: #f9f9f9 !important;
+        border: 1px solid #e5e5e5 !important;
+        border-radius: 10px !important;
+        margin-bottom: 6px !important;
     }
     [data-testid="stExpander"] summary {
-        color: #94a3b8 !important; font-size: 0.83rem !important; font-family: monospace !important;
+        color: #374151 !important;
+        font-size: 0.83rem !important;
     }
 
+    /* ── General inputs (main area) ── */
+    [data-testid="stTextInput"] input,
+    [data-testid="stSelectbox"] > div > div,
+    [data-testid="stTextArea"] textarea {
+        background: #ffffff !important;
+        border: 1px solid #d1d5db !important;
+        border-radius: 8px !important;
+        color: #111111 !important;
+        font-size: 0.85rem !important;
+    }
+    [data-testid="stTextArea"] textarea {
+        color: #111111 !important;
+    }
+
+    /* ── Metrics ── */
+    [data-testid="stMetric"] label {
+        color: #6b7280 !important;
+        font-size: 0.75rem !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #111111 !important;
+        font-size: 1.2rem !important;
+        font-weight: 600 !important;
+    }
+
+    /* ── Buttons ── */
+    [data-testid="stButton"] button[kind="primary"] {
+        background: #111111 !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stButton"] button[kind="primary"]:hover {
+        background: #333333 !important;
+    }
+    [data-testid="stButton"] button[kind="secondary"] {
+        background: #ffffff !important;
+        color: #111111 !important;
+        border: 1px solid #d1d5db !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stButton"] button[kind="secondary"]:hover {
+        border-color: #111111 !important;
+        background: #f4f4f4 !important;
+    }
+
+    /* ── Clear conversation button ── */
+    .clear-btn button {
+        background: transparent !important;
+        border: 1px solid #e5e5e5 !important;
+        color: #9ca3af !important;
+        border-radius: 8px !important;
+        font-size: 0.78rem !important;
+        padding: 4px 14px !important;
+    }
+    .clear-btn button:hover {
+        border-color: #ef4444 !important;
+        color: #ef4444 !important;
+        background: rgba(239,68,68,0.04) !important;
+    }
+
+    /* ── Confirm bar ── */
+    .confirm-bar {
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin: 8px 0;
+        color: #92400e;
+    }
+
+    /* ── Token row (sidebar) ── */
+    .token-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 3px 0; font-size: 0.8rem; color: #6b7280;
+    }
+    .token-row span.val { font-family: monospace; color: #374151; }
+
+    /* ── Empty chat state ── */
     .empty-chat {
         display: flex; flex-direction: column; align-items: center;
         justify-content: center; padding: 60px 20px;
-        color: #334155; text-align: center;
+        text-align: center;
     }
     .empty-chat .icon { font-size: 2.8rem; margin-bottom: 12px; }
-    .empty-chat .title { font-size: 1.1rem; font-weight: 600; color: #475569; margin-bottom: 6px; }
-    .empty-chat .sub { font-size: 0.83rem; color: #334155; }
+    .empty-chat .title {
+        font-size: 1.1rem; font-weight: 600;
+        color: #374151; margin-bottom: 6px;
+    }
+    .empty-chat .sub { font-size: 0.83rem; color: #9ca3af; }
 
-    /* Generation controls slider label */
+    /* ── Captions ── */
+    [data-testid="stCaptionContainer"] p {
+        color: #6b7280 !important;
+        font-size: 0.78rem !important;
+    }
+
+    /* ── Code blocks ── */
+    [data-testid="stCode"] {
+        background: #f4f4f4 !important;
+        border: 1px solid #e5e5e5 !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stCode"] code {
+        color: #111111 !important;
+    }
+
+    /* ── Info / warning / error boxes ── */
+    [data-testid="stAlert"] {
+        border-radius: 10px !important;
+    }
+
+    /* ── Divider ── */
+    hr {
+        border-color: #e5e5e5 !important;
+    }
+
+    /* ── Generation control labels ── */
     .gen-control-label {
-        font-size: 0.72rem; color: #64748b; margin-bottom: 2px;
+        font-size: 0.72rem; color: #6b7280; margin-bottom: 2px;
         font-family: monospace; letter-spacing: 0.04em;
     }
 
-    /* Tooltip question-mark badge next to each control label */
+    /* ── Param hint badge ── */
     .param-hint {
         display: inline-flex;
         align-items: center;
         justify-content: center;
         width: 13px; height: 13px;
         border-radius: 50%;
-        background: #334155;
-        color: #94a3b8;
+        background: #e5e7eb;
+        color: #6b7280;
         font-size: 0.6rem;
         font-family: sans-serif;
         font-weight: 700;
@@ -2790,14 +2938,24 @@ def main() -> None:
         vertical-align: middle;
         margin-left: 4px;
         user-select: none;
-        border: 1px solid #475569;
+        border: 1px solid #d1d5db;
         position: relative;
         top: -1px;
     }
     .param-hint:hover {
-        background: #ef4444;
-        color: #fff;
-        border-color: #ef4444;
+        background: #111111;
+        color: #ffffff;
+        border-color: #111111;
+    }
+
+    /* ── Checkbox label colour fix ── */
+    [data-testid="stCheckbox"] label p {
+        color: #111111 !important;
+    }
+
+    /* ── Slider ── */
+    [data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] {
+        background: #111111 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -3197,8 +3355,8 @@ def main() -> None:
         <div class="token-row"><span>Messages</span><span class="val">{msg_count}</span></div>
         <div class="token-row"><span>Prompt tokens</span><span class="val">{tok.get('prompt',0):,}</span></div>
         <div class="token-row"><span>Completion tokens</span><span class="val">{tok.get('completion',0):,}</span></div>
-        <div class="token-row" style="border-top:1px solid #1e2535;margin-top:4px;padding-top:6px">
-            <span>Total</span><span class="val" style="color:#60a5fa">{tok.get('total',0):,}</span>
+        <div class="token-row" style="border-top:1px solid #e5e5e5;margin-top:4px;padding-top:6px">
+            <span>Total</span><span class="val" style="color:#111111;font-weight:600">{tok.get('total',0):,}</span>
         </div>
         """, unsafe_allow_html=True)
 
