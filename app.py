@@ -2715,8 +2715,9 @@ def main() -> None:
         color: #111111 !important;
     }
 
-    #MainMenu, footer, header { visibility: hidden; }
+    #MainMenu, footer { visibility: hidden; }
     [data-testid="stDecoration"] { display: none; }
+    /* Do NOT hide header — it contains the sidebar toggle button on Streamlit Cloud */
 
     /* ── Sidebar header ── */
     .falcon-header {
