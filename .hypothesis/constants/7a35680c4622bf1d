@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon latest\falcon\config.py
+# hypothesis_version: 6.155.7
+
+[0.4, 0.6, 0.7, 1.0, 100, '.env', 'As an AI', 'I am an AI', 'I cannot', "I'm just an AI", 'MONGODB_URI', 'OPENROUTER_API_KEY', 'as a language model', 'audit', 'audit_log', 'available_models', 'collection', 'communication_style', 'config.yaml', 'core_traits', 'default', 'default_model', 'default_persona', 'enabled', 'episodic_limit', 'extraction_model', 'generation', 'history_max_turns', 'identity', 'judge_system_prompt', 'log_dir', 'memory', 'name', 'r', 'recency_weight', 'relevance_weight', 'repetition_penalty', 'semantic_limit', 'stop_tokens', 'summary_model', 'temperature', 'tone', 'top_k_per_type', 'top_p', 'utf-8', 'working_limit']

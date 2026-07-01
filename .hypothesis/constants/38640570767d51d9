@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon latest\falcon\db.py
+# hypothesis_version: 6.155.1
+
+[10000, 60000, 'MONGODB_URI', '_id', 'audit_log', 'dual_run_log', 'falcon', 'falcon-index-build', 'identity_id', 'memory', 'memory_type', 'messages', 'pinned', 'recorded_at', 'state_tag', 'tokens', 'traces', 'user_timestamp']

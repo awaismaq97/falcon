@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon latest\falcon\audit.py
+# hypothesis_version: 6.155.1
+
+[0.0, 100, 200, '%Y-%m-%dT%H:%M:%SZ', '_id', 'assembled_payload', 'audit_log', 'content', 'context_size', 'generation_settings', 'identity_id', 'latency_ms', 'model', 'prompt_state', 'raw_model_output', 'recorded_at', 'retrieved_memories', 'system_prompt', 'timestamp', 'usage']

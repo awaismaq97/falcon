@@ -111,16 +111,8 @@ def update_summary(
     turn_count = sum(1 for e in history if e.get("role") == "user")
 
     try:
-        import openai
-        client = openai.OpenAI(
-            api_key=api_key,
-            base_url=_OPENROUTER_BASE_URL,
-            default_headers={
-                "Authorization": f"Bearer {api_key}",
-                "HTTP-Referer": "https://github.com/falcon",
-                "X-Title": "Falcon-Summarizer",
-            },
-        )
+        from falcon.engine import get_client
+        client = get_client(api_key, title="Falcon-Summarizer")
         response = client.chat.completions.create(
             model=model,
             messages=[

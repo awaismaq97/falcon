@@ -38,7 +38,26 @@ Public API:
 from datetime import datetime, timezone
 from typing import Any
 
+from bson import ObjectId
+
 from falcon.db import get_db
+
+# Heavy fields embedded in every audit record — the full assembled payload,
+# raw model output, retrieved memories, etc. A single record can be hundreds of
+# KB because assembled_payload contains the entire growing conversation at that
+# turn. The list view must NOT pull these; it projects them out and the full
+# record is fetched on demand (read_audit_detail) only when a user expands one.
+_HEAVY_FIELDS = (
+    "assembled_payload",
+    "raw_model_output",
+    "retrieved_memories",
+    "system_prompt",
+    "generation_settings",
+)
+
+# Projection for the list view: exclude every heavy field but KEEP _id so the
+# full record can be fetched on demand via read_audit_detail().
+_SUMMARY_PROJECTION = {f: 0 for f in _HEAVY_FIELDS}
 
 
 def _utc_now_iso() -> str:
@@ -101,6 +120,65 @@ def read_all_audit_records(limit: int = 200) -> list[dict]:
         .limit(limit)
     )
     return list(cursor)
+
+
+# ---------------------------------------------------------------------------
+# Two-tier reads: light summaries for the list, full detail on demand.
+# ---------------------------------------------------------------------------
+
+def read_audit_summaries(identity_id: str, limit: int = 100) -> list[dict]:
+    """Return lightweight audit summaries for identity_id, newest-first.
+
+    Heavy fields (assembled_payload, raw_model_output, retrieved_memories,
+    system_prompt, generation_settings) are projected out so the list loads
+    in milliseconds instead of pulling tens of MB. Each summary carries a
+    string ``_id`` for fetching the full record via read_audit_detail().
+    """
+    db = get_db()
+    cursor = (
+        db["audit_log"]
+        .find({"identity_id": identity_id}, _SUMMARY_PROJECTION)
+        .sort("recorded_at", -1)
+        .limit(limit)
+    )
+    out: list[dict] = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        out.append(doc)
+    return out
+
+
+def read_all_audit_summaries(limit: int = 200) -> list[dict]:
+    """Return lightweight audit summaries across all identities, newest-first."""
+    db = get_db()
+    cursor = (
+        db["audit_log"]
+        .find({}, _SUMMARY_PROJECTION)
+        .sort("recorded_at", -1)
+        .limit(limit)
+    )
+    out: list[dict] = []
+    for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        out.append(doc)
+    return out
+
+
+def read_audit_detail(record_id: str) -> dict | None:
+    """Fetch the full heavy fields for one audit record by its string _id.
+
+    Returns None if the id is malformed or no record matches.
+    """
+    try:
+        oid = ObjectId(record_id)
+    except Exception:
+        return None
+    db = get_db()
+    doc = db["audit_log"].find_one({"_id": oid})
+    if not doc:
+        return None
+    doc["_id"] = str(doc["_id"])
+    return doc
 
 
 def build_audit_record(

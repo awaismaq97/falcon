@@ -226,15 +226,8 @@ def _extract_and_persist(
 
     # ── LLM call ─────────────────────────────────────────────────────────
     try:
-        client = openai.OpenAI(
-            api_key=Config.OPENROUTER_API_KEY,
-            base_url="https://openrouter.ai/api/v1",
-            default_headers={
-                "Authorization": f"Bearer {Config.OPENROUTER_API_KEY}",
-                "HTTP-Referer": "https://github.com/falcon",
-                "X-Title": "Falcon-MemoryExtractor",
-            },
-        )
+        from falcon.engine import get_client
+        client = get_client(Config.OPENROUTER_API_KEY, title="Falcon-MemoryExtractor")
         response = client.chat.completions.create(
             model=Config.extraction_model,
             messages=[{"role": "user", "content": prompt}],

@@ -134,10 +134,27 @@ def _cache_key_trace_index(identity_id: str) -> str:
     """Lightweight trace index cache — timestamps only, no steps/context."""
     return f"_cache_trace_idx_{identity_id}"
 
+def _cache_key_memory(identity_id: str) -> str:
+    """Full memory-entry list cache for the Memory tab (per identity)."""
+    return f"_cache_memory_{identity_id}"
+
+def _invalidate_audit_summaries(identity_id: str) -> None:
+    """Drop cached audit summaries for this identity so a freshly logged turn
+    shows up on the next render. Audit summary caches are keyed by
+    scope+limit+identity."""
+    for k in [k for k in st.session_state
+              if k.startswith("_audit_summaries_") and k.endswith(identity_id)]:
+        st.session_state.pop(k, None)
+
+
 def _invalidate_cache(identity_id: str) -> None:
     st.session_state.pop(_cache_key_messages(identity_id), None)
     st.session_state.pop(_cache_key_traces(identity_id), None)
     st.session_state.pop(_cache_key_trace_index(identity_id), None)
+    st.session_state.pop(_cache_key_memory(identity_id), None)
+    # Drop the cached message count so the sidebar label refreshes.
+    st.session_state.get("_identity_msg_counts", {}).pop(identity_id, None)
+    _invalidate_audit_summaries(identity_id)
 
 
 # ---------------------------------------------------------------------------
@@ -191,12 +208,19 @@ def _read_trace_index(identity_id: str) -> dict[str, bool]:
     """
     key = _cache_key_trace_index(identity_id)
     if key not in st.session_state:
-        db = get_db()
-        cursor = db["traces"].find(
-            {"identity_id": identity_id},
-            {"_id": 0, "user_timestamp": 1},   # project only timestamp
-        )
-        st.session_state[key] = {doc["user_timestamp"]: True for doc in cursor}
+        try:
+            db = get_db()
+            cursor = (
+                db["traces"]
+                .find(
+                    {"identity_id": identity_id},
+                    {"_id": 0, "user_timestamp": 1},   # project only timestamp
+                )
+                .limit(500)   # cap to prevent unbounded reads
+            )
+            st.session_state[key] = {doc["user_timestamp"]: True for doc in cursor}
+        except Exception:
+            st.session_state[key] = {}
     return st.session_state[key]
 
 
@@ -394,10 +418,22 @@ def _init_session_state() -> None:
 # ---------------------------------------------------------------------------
 
 def _load_identity_history(identity_id: str) -> None:
-    try:
-        st.session_state.history = Identity.load_history(identity_id)
-    except Exception as exc:
-        st.error(f"Failed to load history for '{identity_id}': {exc}")
+    """Point st.session_state.history at the cached message list for this
+    identity, reading from MongoDB only on first access.
+
+    st.session_state.history becomes the SAME list object as the messages
+    cache (_cache_key_messages) so the Logs tab and Chat share one copy and
+    switching identities away and back is instant instead of re-reading the
+    entire (potentially 17s) history from Atlas each time.
+    """
+    key = _cache_key_messages(identity_id)
+    if key not in st.session_state:
+        try:
+            st.session_state[key] = Identity.load_history(identity_id)
+        except Exception as exc:
+            st.error(f"Failed to load history for '{identity_id}': {exc}")
+            st.session_state[key] = []
+    st.session_state.history = st.session_state[key]
 
 
 def _restore_token_totals(identity_id: str) -> None:
@@ -488,7 +524,7 @@ def _render_context_view(cv: dict) -> None:
                 f"margin:4px 0;background:#f9f9f9;border-radius:4px'>"
                 f"<span style='color:{color};font-size:0.72rem;font-weight:600;"
                 f"font-family:monospace;text-transform:uppercase'>{label}</span>"
-                f"<span style='color:#6b7280;font-size:0.72rem;margin-left:8px'>{role}</span>"
+                f"<span style='color:#4b5563;font-size:0.72rem;margin-left:8px'>{role}</span>"
                 f"<div style='color:#111111;font-size:0.83rem;margin-top:4px'>{preview}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -499,7 +535,7 @@ def _render_context_view(cv: dict) -> None:
             st.markdown(
                 f"<div style='border-left:3px solid #d1d5db;padding:6px 12px;"
                 f"margin:4px 0;background:#f4f4f4;border-radius:4px;"
-                f"color:#9ca3af;font-style:italic;font-size:0.82rem'>"
+                f"color:#6b7280;font-style:italic;font-size:0.82rem'>"
                 f"▸ [{history_dropped} turn{'s' if history_dropped != 1 else ''} truncated]"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -701,7 +737,7 @@ def _render_send_preview_inline(preview: dict) -> None:
             f"border:1px solid #e5e5e5;border-left:3px solid {color}'>"
             f"<span style='color:{color};font-size:0.70rem;font-weight:600;"
             f"font-family:monospace;text-transform:uppercase'>{label}</span>"
-            f"<span style='color:#6b7280;font-size:0.70rem;margin-left:8px'>{role}</span>"
+            f"<span style='color:#4b5563;font-size:0.70rem;margin-left:8px'>{role}</span>"
             f"<div style='color:#111111;font-size:0.82rem;margin-top:4px;"
             f"white-space:pre-wrap'>{preview_text}</div>"
             f"</div>",
@@ -712,7 +748,7 @@ def _render_send_preview_inline(preview: dict) -> None:
         st.markdown(
             f"<div style='border-left:3px solid #d1d5db;padding:6px 12px;"
             f"margin:4px 0;background:#f4f4f4;border-radius:4px;"
-            f"color:#9ca3af;font-style:italic;font-size:0.82rem'>"
+            f"color:#6b7280;font-style:italic;font-size:0.82rem'>"
             f"▸ [{dropped} turn{'s' if dropped != 1 else ''} truncated from history]"
             f"</div>",
             unsafe_allow_html=True,
@@ -1052,7 +1088,11 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
         {"timestamp": user_ts,  "role": "user",      "content": user_input},
         {"timestamp": asst_ts,  "role": "assistant",  "content": response_text},
     ]
-    _invalidate_cache(identity_id)
+    # Keep the messages cache in sync with the in-memory history (no DB re-read)
+    # and refresh audit summaries so this turn's audit record shows up. Traces
+    # are updated in place by _append_trace below, so they are NOT invalidated.
+    st.session_state[_cache_key_messages(identity_id)] = final_history
+    _invalidate_audit_summaries(identity_id)
 
     _push("session state updated", {
         "total_entries":  len(final_history),
@@ -1167,25 +1207,19 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
     threading.Thread(target=_bg_audit,  daemon=True).start()
     threading.Thread(target=_bg_tokens, daemon=True).start()
 
-    # Conversation summarization in background — always runs after each turn
-    threading.Thread(target=_bg_summarizer, daemon=True).start()
+    # Conversation summarization in background — only when the active history
+    # mode will actually consume the summary. In "raw" mode (the default) the
+    # summary is never injected into the payload, so generating one every turn
+    # is a wasted LLM call. Summary/hybrid modes regenerate it each turn.
+    if history_mode in ("summary", "hybrid"):
+        threading.Thread(target=_bg_summarizer, daemon=True).start()
 
-    # Memory extraction — run synchronously so the Memory tab reflects new
-    # entries immediately after st.rerun() (called by _render_chat_tab).
-    # It's fast enough (1-3s LLM call) and runs after the response is shown.
-    if Config.memory_extraction_enabled:
-        try:
-            import falcon.memory_extractor as MemoryExtractor
-            MemoryExtractor.run(turn_snapshot)
-            # Signal completion so the _bg_poller fragment can also trigger a
-            # rerun if the synchronous path finishes after the rerun boundary.
-            _extraction_done[identity_id] = time.monotonic()
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).error(
-                "extractor failed for identity=%s: %s", identity_id, exc
-            )
-            st.warning(f"⚠️ Memory extraction failed: {exc}")
+    # Memory extraction — run in a background thread so the UI is never blocked
+    # waiting on its 1-3s LLM call. When it completes it sets _extraction_done,
+    # which the _bg_poller fragment (and the top-of-page check) pick up to
+    # refresh the Memory tab. This keeps the send flow "streaming answer →
+    # instant rerun" with no trailing spinner.
+    threading.Thread(target=_bg_extractor, daemon=True).start()
 
     st.session_state.last_payload  = raw_payload
     st.session_state.last_response = response_text
@@ -1261,6 +1295,9 @@ def _handle_clear() -> None:
     # Delete conversation summary
     Summarizer.delete_summary(identity_id)
     _invalidate_cache(identity_id)
+    # Seed the emptied caches so the next render doesn't re-read from Atlas.
+    st.session_state[_cache_key_messages(identity_id)] = []
+    st.session_state[_cache_key_memory(identity_id)]   = []
     st.session_state.history        = []
     st.session_state.last_payload   = None
     st.session_state.last_response  = None
@@ -1283,6 +1320,23 @@ def _render_chat_tab(user_input: str | None) -> None:
     # Full trace steps are fetched lazily on click via _fetch_trace_payload().
     trace_index = _read_trace_index(identity_id)  # {user_timestamp: True}
 
+    # ── Virtual scrolling: only show the last N messages initially ──
+    # Older messages are loaded on demand via a "Load older" button.
+    _CHAT_PAGE_SIZE = 15
+    _visible_key = "_chat_visible_count"
+    if _visible_key not in st.session_state:
+        st.session_state[_visible_key] = _CHAT_PAGE_SIZE
+
+    # Reset visible count if history shrank (e.g. after clear)
+    total_msgs = len(history)
+    if st.session_state[_visible_key] > total_msgs:
+        st.session_state[_visible_key] = max(_CHAT_PAGE_SIZE, total_msgs)
+
+    # Determine the slice of history to display
+    visible_count = min(st.session_state[_visible_key], total_msgs)
+    start_idx = max(0, total_msgs - visible_count)
+    display_history = history[start_idx:]
+
     # Empty state
     if not history and not user_input:
         st.markdown("""
@@ -1293,19 +1347,27 @@ def _render_chat_tab(user_input: str | None) -> None:
         </div>
         """, unsafe_allow_html=True)
     else:
+        if start_idx > 0:
+            if st.button(f"↑ Load {min(_CHAT_PAGE_SIZE, start_idx)} older ({start_idx} hidden)", key="_load_older_btn", use_container_width=True, type="secondary"):
+                st.session_state[_visible_key] += _CHAT_PAGE_SIZE
+                # Loading older messages must NOT yank the view to the bottom —
+                # keep the reader where they are.
+                st.session_state._suppress_autoscroll = True
+                st.rerun()
+            st.divider()
         i = 0
-        while i < len(history):
-            entry = history[i]
+        while i < len(display_history):
+            entry = display_history[i]
             role  = entry.get("role", "user")
 
             if (role == "user"
-                    and i + 1 < len(history)
-                    and history[i + 1].get("role") == "assistant"):
+                    and i + 1 < len(display_history)
+                    and display_history[i + 1].get("role") == "assistant"):
 
                 with st.chat_message("user"):
                     st.markdown(entry.get("content", ""))
 
-                asst = history[i + 1]
+                asst = display_history[i + 1]
                 with st.chat_message("assistant"):
                     st.markdown(asst.get("content", ""))
 
@@ -1389,6 +1451,42 @@ def _render_chat_tab(user_input: str | None) -> None:
             with st.spinner("Generating…"):
                 _handle_send(user_input)
             st.rerun()
+
+    # ── Auto-scroll chat to bottom on load ──
+    # Uses components.html (runs in iframe) to scroll the parent page's
+    # tab panel to the bottom so the last message is visible immediately.
+    # Skipped after "Load older" so the reader keeps their position instead of
+    # being yanked back down to the newest message.
+    import streamlit.components.v1 as components
+    if st.session_state.pop("_suppress_autoscroll", False):
+        # Older messages were just prepended: keep the reader anchored near the
+        # top rather than scrolling to the bottom.
+        components.html("""
+        <script>
+        (function() {
+            var doc = window.parent.document;
+            var panel = doc.querySelector('[data-testid="stTabs"] [role="tabpanel"]');
+            if (panel) { panel.scrollTop = 0; }
+        })();
+        </script>
+        """, height=0)
+    else:
+        components.html("""
+        <script>
+        (function() {
+            var doc = window.parent.document;
+            function scrollChatToBottom() {
+                var panel = doc.querySelector('[data-testid="stTabs"] [role="tabpanel"]');
+                if (panel) {
+                    panel.scrollTop = panel.scrollHeight;
+                }
+            }
+            // Run after Streamlit finishes rendering
+            setTimeout(scrollChatToBottom, 100);
+            setTimeout(scrollChatToBottom, 500);
+        })();
+        </script>
+        """, height=0)
 
     # Footer controls
     if history:
@@ -1784,31 +1882,56 @@ def _render_audit_tab() -> None:
                 st.rerun()
         return
 
-    try:
-        if scope == "All identities":
-            records = Audit.read_all_audit_records(limit=int(limit))
-        else:
-            records = Audit.read_audit_records(identity_id, limit=int(limit))
-    except Exception as exc:
-        st.error(f"Failed to read audit log: {exc}")
-        return
+    # ── Light summary read (heavy fields projected out) ──────────────────
+    # The full assembled_payload / raw_output for each record can be hundreds
+    # of KB; pulling 50 of them took ~35s on every rerun. We read only summary
+    # fields here (fast) and fetch a single full record on demand below.
+    # Cached per (scope, limit, identity) and invalidated when a new turn is
+    # logged, so eager tab rendering never re-hits Atlas.
+    cache_key = f"_audit_summaries_{scope}_{int(limit)}_{identity_id}"
+    if cache_key not in st.session_state:
+        try:
+            if scope == "All identities":
+                st.session_state[cache_key] = Audit.read_all_audit_summaries(limit=int(limit))
+            else:
+                st.session_state[cache_key] = Audit.read_audit_summaries(identity_id, limit=int(limit))
+        except Exception as exc:
+            st.error(f"Failed to read audit log: {exc}")
+            return
+    records = st.session_state[cache_key]
 
     if not records:
         st.info("No audit records yet. Send a message to generate one.")
         return
 
-    # Export audit log button (Req 10.3)
-    audit_export = make_export_envelope(identity_id=identity_id, data=records)
-    st.download_button(
-        label="⬇ Export audit log",
-        data=to_json_str(audit_export),
-        file_name=f"falcon_audit_{identity_id}_{_utc_iso().replace(':','-')}.json",
-        mime="application/json",
-        key="_audit_export_btn",
-    )
+    # ── Export (heavy) — gated behind a click so the full read only happens
+    # on demand, never on every rerun. ───────────────────────────────────
+    col_prep, col_dl = st.columns([1, 1])
+    with col_prep:
+        if st.button("⬇ Prepare export", key="_audit_export_prep", use_container_width=True):
+            with st.spinner("Loading full audit records…"):
+                if scope == "All identities":
+                    full = Audit.read_all_audit_records(limit=int(limit))
+                else:
+                    full = Audit.read_audit_records(identity_id, limit=int(limit))
+                st.session_state["_audit_export_ready"] = make_export_envelope(
+                    identity_id=identity_id, data=full
+                )
+    with col_dl:
+        if st.session_state.get("_audit_export_ready") is not None:
+            st.download_button(
+                label="Download JSON",
+                data=to_json_str(st.session_state["_audit_export_ready"]),
+                file_name=f"falcon_audit_{identity_id}_{_utc_iso().replace(':','-')}.json",
+                mime="application/json",
+                key="_audit_export_btn",
+                use_container_width=True,
+            )
 
     st.caption(f"{len(records)} record{'s' if len(records)!=1 else ''} (newest first)")
     st.divider()
+
+    _detail_cache = st.session_state.setdefault("_audit_detail_cache", {})
 
     for rec in records:
         ts           = rec.get("timestamp", "")
@@ -1818,9 +1941,9 @@ def _render_audit_tab() -> None:
         latency      = rec.get("latency_ms", 0)
         usage        = rec.get("usage") or {}
         ctx_size     = rec.get("context_size", 0)
-        output_prev  = (rec.get("raw_model_output") or "")[:80]
+        rec_id       = rec.get("_id", "")
 
-        ps_color = "#22c55e" if prompt_state == "present" else "#64748b"
+        ps_color = "#22c55e" if prompt_state == "present" else "#475569"
         label = (
             f"`{ts}` · `{identity}` · `{model}` · "
             f"<span style='color:{ps_color}'>prompt:{prompt_state}</span> · "
@@ -1836,35 +1959,44 @@ def _render_audit_tab() -> None:
             cols[2].metric("Prompt tok",  usage.get("prompt_tokens", "?"))
             cols[3].metric("Output tok",  usage.get("completion_tokens", "?"))
 
-            # Generation settings
-            gen_s = rec.get("generation_settings") or {}
-            st.caption("**Generation Settings**")
-            st.json(gen_s, expanded=False)
-
-            # System prompt
-            st.caption(f"**System Prompt** (state: `{prompt_state}`)")
-            sp = rec.get("system_prompt")
-            if sp:
-                st.code(sp, language=None)
+            # Heavy detail (system prompt, memory, payload, raw output) is
+            # fetched only when the user asks for this specific record.
+            detail = _detail_cache.get(rec_id)
+            if detail is None:
+                if st.button("🔍 Load full record", key=f"_audit_detail_{rec_id}"):
+                    with st.spinner("Loading record…"):
+                        detail = Audit.read_audit_detail(rec_id) or {}
+                        _detail_cache[rec_id] = detail
+                    st.rerun()
             else:
-                st.caption("_None — empty instruction context_")
+                # Generation settings
+                st.caption("**Generation Settings**")
+                st.json(detail.get("generation_settings") or {}, expanded=False)
 
-            # Retrieved memories
-            mems = rec.get("retrieved_memories") or []
-            st.caption(f"**Retrieved Memory** ({len(mems)} entries)")
-            if mems:
-                st.json(mems, expanded=False)
-            else:
-                st.caption("_None_")
+                # System prompt
+                st.caption(f"**System Prompt** (state: `{prompt_state}`)")
+                sp = detail.get("system_prompt")
+                if sp:
+                    st.code(sp, language=None)
+                else:
+                    st.caption("_None — empty instruction context_")
 
-            # Assembled payload
-            st.caption("**Assembled Payload** (exact input to model)")
-            st.json(rec.get("assembled_payload") or [], expanded=False)
+                # Retrieved memories
+                mems = detail.get("retrieved_memories") or []
+                st.caption(f"**Retrieved Memory** ({len(mems)} entries)")
+                if mems:
+                    st.json(mems, expanded=False)
+                else:
+                    st.caption("_None_")
 
-            # Raw model output
-            st.caption("**Raw Model Output**")
-            raw_out = rec.get("raw_model_output") or ""
-            st.code(raw_out[:2000] + ("…" if len(raw_out) > 2000 else ""), language=None)
+                # Assembled payload
+                st.caption("**Assembled Payload** (exact input to model)")
+                st.json(detail.get("assembled_payload") or [], expanded=False)
+
+                # Raw model output
+                st.caption("**Raw Model Output**")
+                raw_out = detail.get("raw_model_output") or ""
+                st.code(raw_out[:2000] + ("…" if len(raw_out) > 2000 else ""), language=None)
 
 
 # ---------------------------------------------------------------------------
@@ -1881,13 +2013,18 @@ def _render_logs_tab() -> None:
     # Lightweight index for button availability — avoids loading full trace docs
     # just to decide whether the Trace button should be enabled or disabled.
     trace_index = _read_trace_index(identity_id)
-    # Full traces only fetched if user opens structured tab and the full data
-    # is actually needed for the dialog. Use lazy helper for trace dialog.
-    traces = _read_traces(identity_id)
+    # Use a lightweight count instead of loading all full trace documents.
+    # Full trace data is fetched lazily via _fetch_trace_steps() on click.
+    try:
+        trace_count = get_db()["traces"].count_documents(
+            {"identity_id": identity_id}
+        )
+    except Exception:
+        trace_count = len(trace_index)
 
     st.caption(
         f"**Entries:** {len(entries) if entries is not None else 'parse error'} "
-        f"| **Trace snapshots:** {len(traces)}"
+        f"| **Trace snapshots:** {trace_count}"
     )
 
     # Export conversation button (Req 10.1)
@@ -1923,7 +2060,20 @@ def _render_logs_tab() -> None:
 
         pairs = _build_pairs(entries)
         total = len(pairs)
-        st.caption(f"**{total} message{'s' if total != 1 else ''}** ({len(entries)} entries)")
+
+        # ── Pagination: show last 50 pairs, load more on click ──
+        _LOGS_PAGE_SIZE = 50
+        _logs_visible_key = "_logs_visible_count"
+        if _logs_visible_key not in st.session_state:
+            st.session_state[_logs_visible_key] = _LOGS_PAGE_SIZE
+        if st.session_state[_logs_visible_key] > total:
+            st.session_state[_logs_visible_key] = max(_LOGS_PAGE_SIZE, total)
+
+        logs_visible = min(st.session_state[_logs_visible_key], total)
+        logs_start = max(0, total - logs_visible)
+        display_pairs = pairs[logs_start:]
+
+        st.caption(f"**{total} message{'s' if total != 1 else ''}** ({len(entries)} entries) · showing last {len(display_pairs)}")
 
         if st.session_state.get("_delete_confirmed"):
             cp      = st.session_state._confirm_pair
@@ -1934,7 +2084,8 @@ def _render_logs_tab() -> None:
                 _save_entries(identity_id, remaining)
                 user_ts = entries[cp_idxs[0]].get("timestamp", "")
                 _delete_trace_for_timestamp(identity_id, user_ts)
-                st.session_state.history = Identity.load_history(identity_id)
+                # _save_entries already refreshed the messages cache; reuse it.
+                st.session_state.history = st.session_state[_cache_key_messages(identity_id)]
                 for k in list(st.session_state.keys()):
                     if k.startswith("_lc_") or k.startswith("_lr_"):
                         del st.session_state[k]
@@ -1949,7 +2100,14 @@ def _render_logs_tab() -> None:
                 cp_idxs, cp_is_pair = cp_data
                 _delete_confirm_dialog(cp, cp_idxs, entries, cp_is_pair)
 
-        for p_num, raw_idxs, is_pair in pairs:
+        # "Load more" button
+        if logs_start > 0:
+            if st.button(f"↑ Load {min(_LOGS_PAGE_SIZE, logs_start)} older ({logs_start} hidden)", key="_logs_load_more", use_container_width=True, type="secondary"):
+                st.session_state[_logs_visible_key] += _LOGS_PAGE_SIZE
+                st.rerun()
+            st.divider()
+
+        for p_num, raw_idxs, is_pair in display_pairs:
             ts_label   = entries[raw_idxs[0]].get("timestamp", "")
             user_ts    = entries[raw_idxs[0]].get("timestamp", "")
             has_trace  = user_ts in trace_index
@@ -2002,7 +2160,7 @@ def _render_logs_tab() -> None:
                             new_entries[r_idx] = {"timestamp": ts, "role": nr, "content": nc}
                         _save_entries(identity_id, new_entries)
                         if identity_id == st.session_state.identity_id:
-                            st.session_state.history = Identity.load_history(identity_id)
+                            st.session_state.history = st.session_state[_cache_key_messages(identity_id)]
                         for k in list(st.session_state.keys()):
                             if k.startswith("_lc_") or k.startswith("_lr_"):
                                 del st.session_state[k]
@@ -2049,7 +2207,7 @@ def _save_raw(identity_id: str, raw_text: str) -> None:
             st.error(f"Entry {idx} missing 'timestamp' — not saved."); return
     _save_entries(identity_id, parsed)
     if identity_id == st.session_state.identity_id:
-        st.session_state.history = Identity.load_history(identity_id)
+        st.session_state.history = st.session_state[_cache_key_messages(identity_id)]
     st.success(f"Saved {len(parsed)} entries to MongoDB.")
     st.rerun()
 
@@ -2107,28 +2265,35 @@ def _confirm_delete_identity_dialog(identity_id: str) -> None:
     yes_c, no_c = st.columns(2)
     with yes_c:
         if st.button("Delete", type="primary", use_container_width=True, key="_del_identity_yes"):
-            db = get_db()
-            try:
-                db["messages"].delete_many({"identity_id": identity_id})
-                db["traces"].delete_many({"identity_id": identity_id})
-                db["tokens"].delete_one({"identity_id": identity_id})
-                db["memory"].delete_many({"identity_id": identity_id})
-                db["audit_log"].delete_many({"identity_id": identity_id})
-                db["identities"].delete_one({"identity_id": identity_id})
-                Summarizer.delete_summary(identity_id)
-            except Exception:
-                pass
-            st.session_state.identity_id     = "default"
-            st.session_state.history         = Identity.load_history("default")
-            st.session_state.last_payload    = None
-            st.session_state.last_response   = None
-            st.session_state.last_context_view     = None
-            st.session_state.last_retrieved_memory = None
-            st.session_state.trace_log       = []
-            st.session_state._confirm_pair   = None
-            st.session_state.session_tokens  = {"prompt": 0, "completion": 0, "total": 0}
-            st.session_state._confirm_delete_identity = False
-            _restore_token_totals("default")
+            # Show immediate feedback — the deletes are several sequential Atlas
+            # round-trips and can take a few seconds on the shared tier.
+            with st.spinner(f"Deleting '{identity_id}'…"):
+                db = get_db()
+                try:
+                    db["messages"].delete_many({"identity_id": identity_id})
+                    db["traces"].delete_many({"identity_id": identity_id})
+                    db["tokens"].delete_one({"identity_id": identity_id})
+                    db["memory"].delete_many({"identity_id": identity_id})
+                    db["audit_log"].delete_many({"identity_id": identity_id})
+                    db["identities"].delete_one({"identity_id": identity_id})
+                    Summarizer.delete_summary(identity_id)
+                except Exception:
+                    pass
+                # Drop the deleted identity's cached data from this session.
+                _invalidate_cache(identity_id)
+                st.session_state.identity_id     = "default"
+                # Load default's history from cache (instant) rather than a fresh
+                # ~17s read from Atlas.
+                _load_identity_history("default")
+                st.session_state.last_payload    = None
+                st.session_state.last_response   = None
+                st.session_state.last_context_view     = None
+                st.session_state.last_retrieved_memory = None
+                st.session_state.trace_log       = []
+                st.session_state._confirm_pair   = None
+                st.session_state.session_tokens  = {"prompt": 0, "completion": 0, "total": 0}
+                st.session_state._confirm_delete_identity = False
+                _restore_token_totals("default")
             st.rerun()
     with no_c:
         if st.button("Cancel", use_container_width=True, key="_del_identity_no"):
@@ -2305,7 +2470,7 @@ def _render_testing_tab() -> None:
 
                 with col_payload:
                     st.markdown(
-                        "<div style='font-size:0.72rem;font-weight:600;color:#f59e0b;"
+                        "<div style='font-size:0.72rem;font-weight:600;color:#d97706;"
                         "font-family:monospace;text-transform:uppercase;margin-bottom:4px'>"
                         "PAYLOAD</div>",
                         unsafe_allow_html=True,
@@ -2315,7 +2480,7 @@ def _render_testing_tab() -> None:
 
                 with col_settings:
                     st.markdown(
-                        "<div style='font-size:0.72rem;font-weight:600;color:#3b82f6;"
+                        "<div style='font-size:0.72rem;font-weight:600;color:#2563eb;"
                         "font-family:monospace;text-transform:uppercase;margin-bottom:4px'>"
                         "SETTINGS</div>",
                         unsafe_allow_html=True,
@@ -2334,7 +2499,7 @@ def _render_testing_tab() -> None:
 
                 with col_output:
                     st.markdown(
-                        "<div style='font-size:0.72rem;font-weight:600;color:#22c55e;"
+                        "<div style='font-size:0.72rem;font-weight:600;color:#16a34a;"
                         "font-family:monospace;text-transform:uppercase;margin-bottom:4px'>"
                         "OUTPUT</div>",
                         unsafe_allow_html=True,
@@ -2353,7 +2518,7 @@ def _render_testing_tab() -> None:
                     st.markdown(
                         f"<div style='background:#f9f9f9;border:1px solid #e5e5e5;"
                         f"border-radius:8px;padding:10px 14px;font-size:0.85rem;"
-                        f"color:#111111;line-height:1.6;white-space:pre-wrap'>"
+                        f"color:#111111 !important;line-height:1.6;white-space:pre-wrap'>"
                         f"{response[:600].replace('<','&lt;').replace('>','&gt;')}"
                         f"{'…' if len(response) > 600 else ''}"
                         f"</div>",
@@ -2379,13 +2544,13 @@ def _render_testing_tab() -> None:
 
 # State tag colours (consistent across all renders)
 _STATE_COLORS = {
-    "Neutral":       "#64748b",
-    "Focused":       "#3b82f6",
-    "Coherence":     "#a855f7",
-    "Grief process": "#f59e0b",
+    "Neutral":       "#475569",
+    "Focused":       "#2563eb",
+    "Coherence":     "#9333ea",
+    "Grief process": "#d97706",
 }
 _BREAKTHROUGH_COLOR  = "#ef4444"
-_HELD_COLOR          = "#22c55e"
+_HELD_COLOR          = "#16a34a"
 
 
 def _render_dual_run_tab() -> None:
@@ -2510,7 +2675,7 @@ def _render_dual_run_tab() -> None:
 
     if state_counts:
         parts = [
-            f"<span style='color:{_STATE_COLORS.get(t, '#6b7280')};font-family:monospace'>"
+            f"<span style='color:{_STATE_COLORS.get(t, '#4b5563')};font-family:monospace'>"
             f"{t}: {n}</span>"
             for t, n in sorted(state_counts.items())
         ]
@@ -2536,7 +2701,7 @@ def _render_dual_run_tab() -> None:
         run1        = rec.get("run1", {})
         run2        = rec.get("run2", {})
 
-        state_color = _STATE_COLORS.get(state_tag, "#6b7280")
+        state_color = _STATE_COLORS.get(state_tag, "#475569")
         bt_icon     = "🔴 BREAKTHROUGH" if any_bt else "🟢 HELD"
         sun_label   = "☀️ active" if sun_active else "☀️ inactive"
 
@@ -2563,7 +2728,7 @@ def _render_dual_run_tab() -> None:
             st.markdown("**Message sent:**")
             st.markdown(
                 f"<div style='background:#f4f4f4;border-radius:8px;padding:8px 12px;"
-                f"font-size:0.85rem;color:#374151;margin-bottom:8px'>"
+                f"font-size:0.85rem;color:#374151 !important;margin-bottom:8px'>"
                 f"{user_input[:400].replace('<','&lt;').replace('>','&gt;')}"
                 f"{'…' if len(user_input) > 400 else ''}"
                 f"</div>",
@@ -2593,7 +2758,7 @@ def _render_dual_run_tab() -> None:
                     status_color = _BREAKTHROUGH_COLOR if broke else _HELD_COLOR
                     status_label = "BROKE THROUGH" if broke else "HELD"
                 else:
-                    status_color = "#64748b"
+                    status_color = "#475569"
                     status_label = "☀️ not active"
 
                 with col:
@@ -2625,7 +2790,7 @@ def _render_dual_run_tab() -> None:
                     st.markdown(
                         f"<div style='background:#f9f9f9;border:1px solid #e5e5e5;"
                         f"border-radius:8px;padding:10px 14px;font-size:0.88rem;"
-                        f"color:#111111;line-height:1.6;white-space:pre-wrap;min-height:60px'>"
+                        f"color:#111111 !important;line-height:1.6;white-space:pre-wrap;min-height:60px'>"
                         f"{text[:800].replace('<','&lt;').replace('>','&gt;')}"
                         f"{'…' if len(text) > 800 else ''}"
                         f"</div>",
@@ -2661,7 +2826,7 @@ def main() -> None:
         page_title="Falcon",
         layout="wide",
         page_icon="🦅",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
     _init_session_state()
 
@@ -2734,7 +2899,7 @@ def main() -> None:
     /* ── Sidebar section labels ── */
     .sidebar-section-label {
         font-size: 0.68rem; font-weight: 600; letter-spacing: 0.08em;
-        text-transform: uppercase; color: #6b7280; margin: 14px 0 6px 0;
+        text-transform: uppercase; color: #4b5563; margin: 14px 0 6px 0;
     }
 
     /* ── Sidebar inputs ── */
@@ -2778,7 +2943,14 @@ def main() -> None:
     [data-testid="stBottom"] {
         background: #ffffff;
         border-top: 1px solid #e5e5e5;
-        padding: 10px 0 6px 0;
+        padding: 6px 0 4px 0;
+    }
+    /* Streamlit gives the bottom block container a huge 56px bottom padding,
+       inflating the input bar to ~160px and hiding chat history behind it.
+       Collapse it to a compact strip (~90px total). */
+    [data-testid="stBottomBlockContainer"] {
+        padding-top: 8px !important;
+        padding-bottom: 10px !important;
     }
     [data-testid="stChatInput"] textarea {
         background: #f9f9f9 !important;
@@ -2793,18 +2965,68 @@ def main() -> None:
         box-shadow: 0 0 0 2px rgba(0,0,0,0.08) !important;
     }
 
-    /* ── Tabs ── */
+    /* ── Dynamic layout: page fills viewport, tabs fixed at top,
+       only chat content scrolls ── */
+
+    /* Main content area: fill viewport, NO page scroll */
+    section[data-testid="stMain"] > div {
+        height: 100vh !important;
+        overflow: hidden !important;
+    }
+    [data-testid="stMainBlockContainer"] {
+        height: 100vh !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+        /* Reclaim Streamlit's default ~6rem top padding so tabs and content
+           sit near the top and Chat/Context get maximum vertical room. The
+           2.6rem clears the compact header strip (which holds the sidebar
+           re-open arrow) so tabs never hide behind it. */
+        padding-top: 2.6rem !important;
+        padding-bottom: 0 !important;
+        max-width: 100% !important;
+    }
+
+    /* Streamlit's top header is an absolute overlay that holds the sidebar
+       re-open arrow. Shrink it to a compact strip (not zero — zero clips the
+       arrow off-screen) so content sits near the top while the arrow stays
+       fully visible and clickable. */
+    [data-testid="stHeader"] {
+        height: 2.6rem !important;
+        min-height: 2.6rem !important;
+        background: transparent !important;
+    }
+
+    /* Tab bar: fixed at top, compact height */
     [data-testid="stTabs"] [data-baseweb="tab-list"] {
-        background: transparent;
+        background: #ffffff;
         border-bottom: 1px solid #e5e5e5;
         gap: 0;
+        padding-top: 2px;
+        padding-bottom: 0;
+        margin-bottom: 0;
+        flex-shrink: 0;
+    }
+    /* Tab panels container: fill remaining height, scroll internally */
+    [data-testid="stTabs"] > div:has([role="tabpanel"]) {
+        flex: 1 1 0 !important;
+        overflow: hidden !important;
+        min-height: 0 !important;
+    }
+    /* Each tab panel: scrollable content area. padding-bottom must exceed the
+       fixed chat-input bar height (~90px) so the last messages / footer scroll
+       clear of it instead of hiding behind it. */
+    [data-testid="stTabs"] [role="tabpanel"] {
+        overflow-y: auto !important;
+        max-height: calc(100vh - 105px) !important;
+        padding-bottom: 110px !important;
     }
     [data-testid="stTabs"] [data-baseweb="tab"] {
         background: transparent !important;
-        color: #6b7280 !important;
+        color: #4b5563 !important;
         font-size: 0.85rem !important;
         font-weight: 500 !important;
-        padding: 8px 20px !important;
+        padding: 5px 18px !important;
         border-bottom: 2px solid transparent !important;
     }
     [data-testid="stTabs"] [aria-selected="true"] {
@@ -2823,6 +3045,9 @@ def main() -> None:
         color: #374151 !important;
         font-size: 0.83rem !important;
     }
+    [data-testid="stExpander"] summary span {
+        color: #374151 !important;
+    }
 
     /* ── General inputs (main area) ── */
     [data-testid="stTextInput"] input,
@@ -2840,7 +3065,7 @@ def main() -> None:
 
     /* ── Metrics ── */
     [data-testid="stMetric"] label {
-        color: #6b7280 !important;
+        color: #4b5563 !important;
         font-size: 0.75rem !important;
     }
     [data-testid="stMetricValue"] {
@@ -2898,7 +3123,7 @@ def main() -> None:
     /* ── Token row (sidebar) ── */
     .token-row {
         display: flex; justify-content: space-between; align-items: center;
-        padding: 3px 0; font-size: 0.8rem; color: #6b7280;
+        padding: 3px 0; font-size: 0.8rem; color: #4b5563;
     }
     .token-row span.val { font-family: monospace; color: #374151; }
 
@@ -2913,12 +3138,70 @@ def main() -> None:
         font-size: 1.1rem; font-weight: 600;
         color: #374151; margin-bottom: 6px;
     }
-    .empty-chat .sub { font-size: 0.83rem; color: #9ca3af; }
+    .empty-chat .sub { font-size: 0.83rem; color: #6b7280; }
 
     /* ── Captions ── */
-    [data-testid="stCaptionContainer"] p {
-        color: #6b7280 !important;
-        font-size: 0.78rem !important;
+    /* st.caption is the main offender for faint grey text on white. Cover the
+       markup used across Streamlit versions (stCaptionContainer, stCaption,
+       and the <small> element captions render into) and force a readable dark
+       slate. */
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] *,
+    [data-testid="stMain"] .stCaption,
+    [data-testid="stMain"] .stCaption *,
+    [data-testid="stMain"] small,
+    [data-testid="stMain"] [data-testid="stMarkdownContainer"] small,
+    .stCaption p,
+    .stCaption span {
+        color: #374151 !important;
+        font-size: 0.82rem !important;
+        opacity: 1 !important;
+    }
+
+    /* ── Global text readability — force ALL text in main area to be dark ── */
+    [data-testid="stMain"] p,
+    [data-testid="stMain"] span,
+    [data-testid="stMain"] label,
+    [data-testid="stMain"] li,
+    [data-testid="stMain"] td,
+    [data-testid="stMain"] th,
+    [data-testid="stMain"] div,
+    [data-testid="stMain"] pre,
+    [data-testid="stMain"] code {
+        color: #111111 !important;
+    }
+    [data-testid="stMain"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMain"] [data-testid="stMarkdownContainer"] span,
+    [data-testid="stMain"] [data-testid="stMarkdownContainer"] div {
+        color: #111111 !important;
+    }
+    [data-testid="stMain"] [data-testid="stText"] {
+        color: #111111 !important;
+    }
+    /* JSON viewer text — multiple selectors for cross-version compatibility */
+    [data-testid="stMain"] .stJson,
+    [data-testid="stMain"] [data-testid="stJson"],
+    [data-testid="stMain"] [class*="json"],
+    [data-testid="stMain"] [data-testid="stJsonViewer"] {
+        color: #111111 !important;
+    }
+    /* Alert boxes (info, warning, success, error) */
+    [data-testid="stMain"] [data-testid="stAlert"] p,
+    [data-testid="stMain"] [data-testid="stAlert"] span,
+    [data-testid="stMain"] [data-testid="stAlert"] div {
+        color: #111111 !important;
+    }
+    /* Code blocks — keep code text dark */
+    [data-testid="stMain"] [data-testid="stCode"] code,
+    [data-testid="stMain"] pre code,
+    [data-testid="stMain"] pre {
+        color: #111111 !important;
+    }
+    /* Expander content */
+    [data-testid="stMain"] [data-testid="stExpander"] p,
+    [data-testid="stMain"] [data-testid="stExpander"] span,
+    [data-testid="stMain"] [data-testid="stExpander"] div {
+        color: #111111 !important;
     }
 
     /* ── Code blocks ── */
@@ -2938,7 +3221,7 @@ def main() -> None:
 
     /* ── Generation control labels ── */
     .gen-control-label {
-        font-size: 0.72rem; color: #6b7280; margin-bottom: 2px;
+        font-size: 0.72rem; color: #4b5563; margin-bottom: 2px;
         font-family: monospace; letter-spacing: 0.04em;
     }
 
@@ -3029,13 +3312,26 @@ def main() -> None:
         all_ids      = sorted(set(existing_ids) | {st.session_state.identity_id, "default"})
         current_idx  = all_ids.index(st.session_state.identity_id) if st.session_state.identity_id in all_ids else 0
 
-        # Build identity options with message counts (Req 12.4, 12.5)
+        # Build identity options with message counts (Req 12.4, 12.5).
+        # count_documents per identity on every rerun is a hidden cost on a slow
+        # Atlas tier, so results are cached. The active identity's count comes
+        # for free from its cached history length (which stays live as messages
+        # are sent); other identities only change while active, so their cached
+        # count stays valid until they are visited again.
         db = get_db()
+        _count_cache: dict = st.session_state.setdefault("_identity_msg_counts", {})
         def _msg_count(iid: str) -> int:
-            try:
-                return db["messages"].count_documents({"identity_id": iid})
-            except Exception:
-                return 0
+            cached_hist = st.session_state.get(_cache_key_messages(iid))
+            if cached_hist is not None:
+                n = len(cached_hist)
+                _count_cache[iid] = n
+                return n
+            if iid not in _count_cache:
+                try:
+                    _count_cache[iid] = db["messages"].count_documents({"identity_id": iid})
+                except Exception:
+                    _count_cache[iid] = 0
+            return _count_cache[iid]
         id_options_display = [f"{iid} ({_msg_count(iid)} msgs)" for iid in all_ids]
         id_option_map      = dict(zip(id_options_display, all_ids))
 
@@ -3051,9 +3347,12 @@ def main() -> None:
         )
         chosen = id_option_map.get(chosen_display, st.session_state.identity_id)
         if chosen != st.session_state.identity_id:
-            _invalidate_cache(chosen)
+            # Do NOT invalidate the target's caches here — switching should reuse
+            # whatever was already loaded so coming back to an identity is
+            # instant. Caches are keyed per-identity and only cleared on actual
+            # mutations (send / clear / edit).
             st.session_state.identity_id          = chosen
-            st.session_state.history              = Identity.load_history(chosen)
+            _load_identity_history(chosen)   # cached — instant on repeat visits
             st.session_state.last_payload         = None
             st.session_state.last_response        = None
             st.session_state.last_context_view    = None
@@ -3399,8 +3698,9 @@ def main() -> None:
 
     # ── Periodic rerun to pick up background extraction completions ───────────
     # Without this, the check above only fires when the user does something.
-    # The fragment auto-reruns every 3s to catch the extraction completing.
-    @st.fragment(run_every=3)
+    # The fragment auto-reruns every 30s to catch the extraction completing.
+    # (Was 3s which caused ALL tabs to re-render every 3 seconds — very slow)
+    @st.fragment(run_every=30)
     def _bg_poller():
         cid   = st.session_state.identity_id
         done  = _extraction_done.get(cid, 0.0)

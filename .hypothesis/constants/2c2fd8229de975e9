@@ -1,0 +1,4 @@
+# file: D:\Falcon\Falcon\falcon latest\falcon\memory_extractor.py
+# hypothesis_version: 6.155.7
+
+[0.1, 1024, 2000, 10000, '!.,', '?', '```', 'ai is', 'asked to help', 'assistant greet', 'assistant is', 'assistant replied', 'assistant responded', 'assistant said', 'assistant_message', 'auto', 'content', 'conversation with', 'designed to assist', 'episodic', 'good afternoon', 'good evening', 'good morning', 'greetings', 'hello', 'here to help', 'hey', 'hi', 'howdy', 'i am an ai', 'i am not an ai', "i'm an ai", 'identity_id', 'is a language model', 'is an ai', 'is designed to', 'is not an ai', 'language model', 'large language model', 'memory_type', 'model is', 'offer help', 'offers assistance', 'offers help', 'procedural', 'role', 'semantic', 'tags', 'the ai', 'the assistant', 'the model', 'the user greeted', 'the user said hello', 'turn_index', 'user', 'user initiated', 'user started', 'user_message', 'with a greeting', 'with a hello', 'working']

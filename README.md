@@ -35,7 +35,15 @@ It is designed for researchers and practitioners who need to observe model behav
 ### 1. Install dependencies
 
 ```bash
-pip install streamlit pymongo openai python-dotenv pyyaml
+pip install -r requirements.txt
+```
+
+Or with conda:
+
+```bash
+conda create -n falcon python=3.11 -y
+conda activate falcon
+pip install -r requirements.txt
 ```
 
 ### 2. Create `.env` in the project root
@@ -55,6 +63,8 @@ See the [Configuration](#configuration) section.
 streamlit run app.py
 ```
 
+`config.yaml` is read **once at startup**. Edit it while the app is running and the change won't take effect until you restart. See [Persona](#persona) for how this affects persona seeding.
+
 ---
 
 ## Configuration
@@ -69,8 +79,8 @@ default_model: "mistralai/mistral-large"
 available_models:
   - "qwen/qwen-2.5-72b-instruct"
   - "meta-llama/llama-3.3-70b-instruct"
-  - "mistralai/mistral-large"
   - "deepseek/deepseek-chat-v3-0324"
+  - "mistralai/mistral-large"
 
 # System prompt active when system prompt toggle is ON
 # Example below uses the silence/☀️ instruction
@@ -115,12 +125,16 @@ relevance_weight: 0.6
 # Model for automatic background memory extraction (use a fast/cheap model)
 extraction_model: "openai/gpt-4o-mini"
 
-# Model for conversation summarization
+# Master switch for automatic background memory extraction
+memory_extraction_enabled: true
+
+# Model for conversation summarization (summary / hybrid history modes)
 summary_model: "deepseek/deepseek-v4-flash"
 
 # History truncation
-history_truncation_strategy: "last-n-turns"
-history_max_turns: 15
+history_truncation_strategy: "last-n-turns"   # last-n-turns | token-budget | summarize-and-compress
+history_max_turns: 15                          # used by last-n-turns (range 1–100)
+history_token_budget: 4000                     # used by token-budget (range 100–200000)
 
 # Patterns that trigger an assistant-language warning banner
 # when the system prompt is OFF
@@ -130,6 +144,12 @@ assistant_language_patterns:
   - "Certainly"
   - "Of course"
   - "I apologize"
+
+# Judge instruction context — the judge only emits a JSON verdict,
+# it never rewrites responses (see the Judge section)
+judge_system_prompt: |
+  You are a signal/noise classifier for a minimalist inference channel.
+  ...
 ```
 
 ---
@@ -140,7 +160,7 @@ assistant_language_patterns:
 app.py                    — Streamlit UI: all tabs, sidebar, send flow
 falcon/
   config.py               — Configuration loader and validator (fail-fast)
-  db.py                   — MongoDB connection singleton (st.cache_resource)
+  db.py                   — MongoDB connection singleton (st.cache_resource); indexes built in a background thread so first render isn't blocked
   engine.py               — Payload assembly, truncation, streaming inference
   identity.py             — Identity management (create, list, load, clear)
   logger.py               — Message persistence (append_message → MongoDB)
@@ -177,11 +197,13 @@ tests/
 
 An identity is a fully isolated context — its own conversation history, memory store, persona, token usage, audit trail, and dual-run log. Nothing leaks between identities.
 
-- **Create** — enter a name in the sidebar and click `＋ Create`. The identity is registered immediately and seeded with the default persona from `config.yaml`.
-- **Switch** — select from the dropdown. History, memory, and tokens load instantly.
-- **Delete** — removes everything: messages, memory, traces, tokens, audit records, summaries, and the identity registry entry.
+- **Create** — enter a name in the sidebar and click `＋ Create`. The identity is registered immediately and seeded with the default persona **as loaded from `config.yaml` at app startup** (see [Persona](#persona) for the restart caveat).
+- **Switch** — select from the dropdown. History, memory, tokens, and audit are cached per identity, so switching away and back is instant and does not re-read from the database.
+- **Delete** — removes everything: messages, memory, traces, tokens, audit records, summaries, and the identity registry entry. A spinner is shown while the deletes run.
 
 The `default` identity always exists and cannot be deleted.
+
+> **Performance:** Per-identity history, traces, memory, and audit summaries are cached in session state on first load and reused across reruns. The database is only re-read when the underlying data actually changes (send, clear, or edit). Audit records are loaded as lightweight summaries first, with the full per-turn payload fetched on demand.
 
 ---
 
@@ -229,6 +251,13 @@ Each identity has one persona entry. It is injected as the first system message 
 
 Edit it any time from the **Memory tab → Edit Persona**. The four fields (name, tone, communication style, core traits) are stored as a single structured string and parsed back for display.
 
+### Persona seeding from `config.yaml`
+
+The `default_persona` block in `config.yaml` is read **once when the app starts**. Two things follow from this:
+
+- **Editing `config.yaml` requires a restart.** A running app keeps the persona it loaded at startup, so newly created identities are seeded with that *old* value until you restart. If a new identity shows a persona you thought you changed, restart the app.
+- **Only the identity named in `default_persona.identity` (default: `default`) is re-synced.** On each startup its DB persona is overwritten to match `config.yaml`. All other identities are seeded **once at creation** and never updated afterward — edit them individually in the Memory tab if you change the config later.
+
 ### History Modes
 
 Three modes are available from the sidebar:
@@ -260,10 +289,13 @@ Each turn follows this sequence:
 5. Strip `<think>…</think>` blocks inline during streaming
 6. Optionally pass through the **judge** (pass/suppress verdict) before display
 7. Log assistant message
-8. Run memory extraction synchronously
-9. Write audit record, token counts, and conversation summary in background threads
-10. If dual-run is enabled, fire two additional inference calls in a background thread and log the comparison record
-11. `st.rerun()` — UI refreshes with new message and updated memory
+8. `st.rerun()` — the UI refreshes immediately with the new message; all remaining work happens in background threads so the send never blocks:
+   - **Memory extraction** — classifies the turn into typed entries (skipped if `memory_extraction_enabled` is false)
+   - **Audit record** and **token counts** — persisted
+   - **Conversation summary** — regenerated **only in `summary` / `hybrid` history modes** (skipped in `raw`, where it would never be used)
+   - **Dual-run** — if enabled, two additional inference calls fire and the comparison record is logged
+
+When memory extraction finishes it signals the UI, which refreshes the Memory tab without a manual reload.
 
 ### Judge
 
@@ -335,7 +367,7 @@ The **Dual Run** tab displays all logged records with:
 ## UI Tabs
 
 ### Chat
-Standard chat interface. Responses stream token by token. Each assistant turn has a `⌥ context` button that opens a dialog showing the exact assembled payload sent to the model for that specific turn.
+Standard chat interface. Responses stream token by token. Each assistant turn has a `⌥ context` button that opens a dialog showing the exact assembled payload sent to the model for that specific turn. Long histories render the most recent turns first, with a **Load older** button to page further back (it keeps your scroll position instead of jumping to the newest message).
 
 ### Context
 Full context snapshot for the last turn: persona block, system prompt state, retrieved memory entries with scores and match reasons, history included/dropped counts, token estimate, and the raw assembled payload. Exportable as JSON.
@@ -348,7 +380,7 @@ Full read/write access to the memory store:
 - Per-type tabs (Semantic, Episodic, Procedural, Working, Archive) — add, pin, tag, edit, delete, or bulk-clear entries
 
 ### Audit
-Complete inference audit log. Every turn records: model, prompt state, system prompt text, retrieved memories, generation settings, context size, token estimate, raw model output, token usage, and latency. Filterable by identity, exportable as JSON.
+Complete inference audit log. Every turn records: model, prompt state, system prompt text, retrieved memories, generation settings, context size, token estimate, raw model output, token usage, and latency. The list loads as lightweight summaries (heavy fields projected out) for speed; the full per-turn payload is fetched on demand via **Load full record**, and the full export is built only when you click **Prepare export**. Filterable by identity, exportable as JSON.
 
 ### Logs
 Raw conversation history with per-turn edit, delete, and trace inspection. Trace view shows every stage of the inference pipeline with timestamps for that specific turn.
@@ -363,11 +395,13 @@ Side-by-side dual-run log. See [Dual-Run Logging](#dual-run-logging) for full de
 
 ## Sidebar Controls
 
+The sidebar starts **collapsed** — open it with the `»` arrow at the top-left when you need to change something.
+
 | Control | Description |
 |---|---|
-| Identity selector | Switch between identities |
-| Create identity | Persists immediately and seeds default persona |
-| Delete identity | Removes all data for the current identity |
+| Identity selector | Switch between identities (cached — instant on repeat visits) |
+| Create identity | Persists immediately and seeds the startup-loaded default persona |
+| Delete identity | Removes all data for the current identity; shows a spinner while running |
 | Model | Select from `available_models` in `config.yaml` |
 | System prompt | Toggle on/off; edit inline. Off = no system message sent |
 | Persona | Toggle on/off. Off = persona block excluded from payload |

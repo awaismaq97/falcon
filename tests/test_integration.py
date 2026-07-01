@@ -147,10 +147,12 @@ class TestMemoryExtractorIntegration:
         mock_response.choices = [mock_choice]
 
         with patch("falcon.memory.get_db", return_value=mock_db):
-            with patch("openai.OpenAI") as mock_openai:
-                mock_client = MagicMock()
-                mock_openai.return_value = mock_client
-                mock_client.chat.completions.create.return_value = mock_response
+            # The extractor obtains its OpenRouter client via
+            # falcon.engine.get_client (a process-wide pooled client), so the
+            # mock must patch that accessor rather than openai.OpenAI directly.
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.return_value = mock_response
+            with patch("falcon.engine.get_client", return_value=mock_client):
 
                 import falcon.memory_extractor as Extractor
                 fresh_queues = defaultdict(lambda: deque(maxlen=10))

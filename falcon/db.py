@@ -13,10 +13,18 @@ Collections used:
   tokens    — {identity_id, prompt, completion, total}
 """
 
+import logging
 import os
+import threading
 
 from pymongo import MongoClient
 from pymongo.database import Database
+
+logger = logging.getLogger(__name__)
+
+# Ensures the one-time index build runs at most once per process.
+_indexes_started = False
+_indexes_lock = threading.Lock()
 
 def get_db() -> Database:
     """Return the Falcon MongoDB database, connecting on first call.
@@ -61,25 +69,47 @@ def _make_db() -> Database:
         socketTimeoutMS=60000,
     )
     db = client["falcon"]
-    # Ensure indexes exist (no-op if already present)
-    db["messages"].create_index("identity_id")
-    # Compound index so history reads sort by insertion order without a scan
-    db["messages"].create_index([("identity_id", 1), ("_id", 1)])
-    db["traces"].create_index("identity_id")
-    # Compound index for the user_timestamp lookup used in chat rendering
-    db["traces"].create_index([("identity_id", 1), ("user_timestamp", 1)])
-    db["tokens"].create_index("identity_id", unique=True)
-    # Audit trail indexes
-    db["audit_log"].create_index("identity_id")
-    db["audit_log"].create_index("recorded_at")
-    # Memory indexes
-    db["memory"].create_index("identity_id")
-    db["memory"].create_index([("identity_id", 1), ("memory_type", 1)])
-    db["memory"].create_index([("identity_id", 1), ("pinned", -1)])
-    # Conversation summary index
-    db["conversation_summaries"].create_index("identity_id", unique=True)
-    # Dual-run log indexes
-    db["dual_run_log"].create_index("identity_id")
-    db["dual_run_log"].create_index("recorded_at")
-    db["dual_run_log"].create_index([("identity_id", 1), ("state_tag", 1)])
+    # Kick off index creation in the background so the first page render is not
+    # blocked on ~15 sequential create_index round-trips to Atlas (which cost
+    # ~12s of blank-screen on a shared-tier cluster). Indexes only affect query
+    # speed, not correctness, and on an existing cluster they already exist, so
+    # nothing depends on them being ready before the app starts serving.
+    _ensure_indexes_async(db)
     return db
+
+
+def _ensure_indexes_async(db: Database) -> None:
+    """Create all indexes once per process, in a daemon thread."""
+    global _indexes_started
+    with _indexes_lock:
+        if _indexes_started:
+            return
+        _indexes_started = True
+
+    def _build() -> None:
+        try:
+            # Ensure indexes exist (no-op if already present)
+            db["messages"].create_index("identity_id")
+            # Compound index so history reads sort by insertion order without a scan
+            db["messages"].create_index([("identity_id", 1), ("_id", 1)])
+            db["traces"].create_index("identity_id")
+            # Compound index for the user_timestamp lookup used in chat rendering
+            db["traces"].create_index([("identity_id", 1), ("user_timestamp", 1)])
+            db["tokens"].create_index("identity_id", unique=True)
+            # Audit trail indexes
+            db["audit_log"].create_index("identity_id")
+            db["audit_log"].create_index("recorded_at")
+            # Memory indexes
+            db["memory"].create_index("identity_id")
+            db["memory"].create_index([("identity_id", 1), ("memory_type", 1)])
+            db["memory"].create_index([("identity_id", 1), ("pinned", -1)])
+            # Conversation summary index
+            db["conversation_summaries"].create_index("identity_id", unique=True)
+            # Dual-run log indexes
+            db["dual_run_log"].create_index("identity_id")
+            db["dual_run_log"].create_index("recorded_at")
+            db["dual_run_log"].create_index([("identity_id", 1), ("state_tag", 1)])
+        except Exception as exc:
+            logger.warning("index creation failed (queries still work): %s", exc)
+
+    threading.Thread(target=_build, name="falcon-index-build", daemon=True).start()

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "falcon-app",
+      "runtimeExecutable": "C:\\Users\\Awais\\anaconda3\\envs\\falcon\\python.exe",
+      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless", "true", "--server.port", "8601"],
+      "port": 8601
+    }
+  ]
+}

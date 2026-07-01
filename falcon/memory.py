@@ -316,25 +316,33 @@ def retrieve_for_generation(
 
     query_lower = query.lower() if query else ""
 
+    # ── Single round-trip: fetch persona + all active-type entries at once ─
+    # One indexed query instead of five sequential Atlas round-trips (persona
+    # + one per active type). Results are grouped in Python below; because the
+    # cursor is sorted created_at desc, each type's slice preserves the exact
+    # newest-first ordering the per-type scoring loop relies on.
+    cursor = (
+        db["memory"]
+        .find({
+            "identity_id": identity_id,
+            "memory_type": {"$in": list(_ACTIVE_TYPES) + [_PERSONA_TYPE]},
+        })
+        .sort("created_at", -1)
+    )
+    docs_by_type: dict[str, list[dict]] = {}
+    for d in cursor:
+        docs_by_type.setdefault(d.get("memory_type", ""), []).append(_doc_to_dict(d))
+
     # ── Persona: always prepend if exists; never scored ───────────────────
-    persona_doc = db["memory"].find_one({
-        "identity_id": identity_id,
-        "memory_type": _PERSONA_TYPE,
-    })
     persona_entry: dict | None = None
-    if persona_doc:
-        persona_entry = _doc_to_dict(persona_doc)
+    persona_docs = docs_by_type.get(_PERSONA_TYPE)
+    if persona_docs:
+        persona_entry = persona_docs[0]
         by_type[_PERSONA_TYPE] = [persona_entry]
 
     # ── Active types: weighted scoring ────────────────────────────────────
     for mem_type in _ACTIVE_TYPES:
-        # Fetch all non-archive entries for this identity and type
-        cursor = (
-            db["memory"]
-            .find({"identity_id": identity_id, "memory_type": mem_type})
-            .sort("created_at", -1)
-        )
-        docs = [_doc_to_dict(d) for d in cursor]
+        docs = docs_by_type.get(mem_type, [])
         if not docs:
             continue
 

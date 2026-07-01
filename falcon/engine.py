@@ -44,18 +44,32 @@ _EMPTY_OUTPUT_MARKER = "[no output]"
 _client_cache: dict[str, OpenAI] = {}
 
 
-def _get_client(api_key: str) -> OpenAI:
-    if api_key not in _client_cache:
-        _client_cache[api_key] = OpenAI(
+def _get_client(api_key: str, title: str = "Falcon") -> OpenAI:
+    # Cache per (api_key, title) so background callers (extractor, summarizer)
+    # share a pooled client and reuse its keep-alive connections instead of
+    # opening a fresh TLS connection on every turn.
+    cache_key = f"{title}:{api_key}"
+    if cache_key not in _client_cache:
+        _client_cache[cache_key] = OpenAI(
             api_key=api_key,
             base_url=_OPENROUTER_BASE_URL,
             default_headers={
                 "Authorization": f"Bearer {api_key}",
                 "HTTP-Referer":  "https://github.com/falcon",
-                "X-Title":       "Falcon",
+                "X-Title":       title,
             },
         )
-    return _client_cache[api_key]
+    return _client_cache[cache_key]
+
+
+def get_client(api_key: str, title: str = "Falcon") -> OpenAI:
+    """Public accessor for the process-wide pooled OpenRouter client.
+
+    Background workers (memory extraction, summarization) call this instead of
+    constructing their own OpenAI() each turn, so the connection pool and TLS
+    session are reused across calls.
+    """
+    return _get_client(api_key, title)
 
 VALID_SOURCES = frozenset({
     "system-prompt",
