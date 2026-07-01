@@ -2965,6 +2965,35 @@ def main() -> None:
         box-shadow: 0 0 0 2px rgba(0,0,0,0.08) !important;
     }
 
+    /* ── Mobile: keep the send arrow tappable ──
+       On the hosted streamlit.app, Community Cloud paints a floating
+       "Manage app" badge (owner-only) in the bottom-right corner and mobile
+       browsers add their own chrome there. Both land exactly on top of
+       st.chat_input's send button. The input bar has an opaque white
+       background, so lifting its stacking order above those overlays makes
+       the send arrow visible and clickable again. We also nudge the button
+       in from the very corner and give it room so it never sits fully under
+       a corner badge. */
+    @media (max-width: 640px) {
+        [data-testid="stBottom"] {
+            z-index: 2147483000 !important;
+        }
+        [data-testid="stChatInput"] {
+            padding-right: 6px !important;
+        }
+        [data-testid="stChatInputSubmitButton"] {
+            position: relative !important;
+            z-index: 2147483001 !important;
+        }
+        /* Push the hosted-cloud badge / toolbar down out of the input's way
+           if it happens to render inside the app document. */
+        [data-testid="stStatusWidget"],
+        .viewerBadge_container__1QSob,
+        [class*="viewerBadge_container"] {
+            bottom: 88px !important;
+        }
+    }
+
     /* ── Dynamic layout: page fills viewport, tabs fixed at top,
        only chat content scrolls ── */
 
