@@ -372,10 +372,10 @@ def _init_session_state() -> None:
         "_show_context_viewer":     False,
         "_confirm_audit_delete":    False,
         # System prompt
-        "use_system_prompt":        True,    # on by default — neutral text-processor prompt active
+        "use_system_prompt":        False,   # off by default — no platform prompt injected until toggled on
         "system_prompt_text":       Config.default_system_prompt,
         # Persona
-        "use_persona":              True,    # on by default — persona memory injected when available
+        "use_persona":              False,   # off by default — persona block excluded until toggled on
         # Generation controls
         "gen_temperature":          Config.generation_temperature,
         "gen_top_p":                Config.generation_top_p,
@@ -611,7 +611,7 @@ def _build_send_preview(user_input: str) -> dict:
         retrieval = None
         retrieved_entries = []
 
-    if not st.session_state.get("use_persona", True):
+    if not st.session_state.get("use_persona", False):
         retrieved_entries = [e for e in retrieved_entries if e.get("memory_type") != "persona"]
 
     messages = list(st.session_state.history) + [{"role": "user", "content": user_input}]
@@ -897,7 +897,7 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
             _push("memory retrieval failed", str(exc), status="warn")
 
         # If persona is disabled, strip persona entries from retrieved memory
-        if not st.session_state.get("use_persona", True):
+        if not st.session_state.get("use_persona", False):
             retrieved_entries = [e for e in retrieved_entries if e.get("memory_type") != "persona"]
 
         # Build messages for model (full history + current user turn)
@@ -1056,7 +1056,7 @@ def _handle_send(user_input: str, preview: dict | None = None) -> None:
         _push("← response complete", {"latency_ms": api_latency_ms, "content": response_text})
 
     # Assistant-language warning banner (Req 17.5, 16.5)
-    if not suppressed and not st.session_state.get("use_system_prompt", True):
+    if not suppressed and not st.session_state.get("use_system_prompt", False):
         for pattern in assistant_language_patterns:
             if pattern.lower() in response_text.lower():
                 st.warning(
@@ -1312,6 +1312,82 @@ def _handle_clear() -> None:
 # Tab: Chat
 # ---------------------------------------------------------------------------
 
+def _render_copy_button(text: str, uid: str) -> None:
+    """Render a compact 'copy to clipboard' button beneath a chat message.
+
+    Streamlit sanitizes inline onclick/<script> out of st.markdown, so the
+    button has to live inside a components.html iframe. The message text is
+    passed as base64 (UTF-8 safe — no JS/HTML escaping pitfalls, handles emoji
+    and quotes/newlines) and decoded in the browser at click time. Copy uses
+    the async Clipboard API with a hidden-textarea execCommand fallback for
+    contexts where it is blocked.
+    """
+    import base64
+    import streamlit.components.v1 as components
+
+    b64 = base64.b64encode((text or "").encode("utf-8")).decode("ascii")
+    html = f"""
+    <style>
+      html, body {{ margin:0; padding:0; background:transparent; }}
+      .cp-wrap {{ display:flex; justify-content:flex-end; }}
+      .cp-btn {{
+        background:transparent; border:none; cursor:pointer; padding:3px 4px;
+        border-radius:6px; color:#9ca3af; line-height:0;
+        transition:color .12s ease, background .12s ease;
+      }}
+      .cp-btn:hover {{ color:#374151; background:rgba(0,0,0,0.05); }}
+    </style>
+    <div class="cp-wrap">
+      <button class="cp-btn" id="cp_{uid}" title="Copy" aria-label="Copy message">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+             stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </button>
+    </div>
+    <script>
+    (function(){{
+      var btn = document.getElementById("cp_{uid}");
+      if (!btn) return;
+      var b64 = "{b64}";
+      function decode() {{
+        var bin = atob(b64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new TextDecoder('utf-8').decode(bytes);
+      }}
+      function flash() {{
+        var prev = btn.innerHTML;
+        btn.style.color = '#22c55e';
+        btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" '
+          + 'fill="none" stroke="currentColor" stroke-width="2" '
+          + 'stroke-linecap="round" stroke-linejoin="round">'
+          + '<polyline points="20 6 9 17 4 12"></polyline></svg>';
+        setTimeout(function(){{ btn.innerHTML = prev; btn.style.color=''; }}, 1100);
+      }}
+      function fallback(text) {{
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        try {{ document.execCommand('copy'); flash(); }} catch (e) {{}}
+        document.body.removeChild(ta);
+      }}
+      btn.addEventListener('click', function() {{
+        var text = decode();
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+          navigator.clipboard.writeText(text).then(flash).catch(function(){{ fallback(text); }});
+        }} else {{
+          fallback(text);
+        }}
+      }});
+    }})();
+    </script>
+    """
+    components.html(html, height=28)
+
+
 def _render_chat_tab(user_input: str | None) -> None:
     history     = st.session_state.history
     identity_id = st.session_state.identity_id
@@ -1366,10 +1442,12 @@ def _render_chat_tab(user_input: str | None) -> None:
 
                 with st.chat_message("user"):
                     st.markdown(entry.get("content", ""))
+                    _render_copy_button(entry.get("content", ""), f"u{start_idx + i}")
 
                 asst = display_history[i + 1]
                 with st.chat_message("assistant"):
                     st.markdown(asst.get("content", ""))
+                    _render_copy_button(asst.get("content", ""), f"a{start_idx + i + 1}")
 
                 user_ts = entry.get("timestamp", "")
                 if user_ts in trace_index:
@@ -1387,6 +1465,7 @@ def _render_chat_tab(user_input: str | None) -> None:
             else:
                 with st.chat_message(role):
                     st.markdown(entry.get("content", ""))
+                    _render_copy_button(entry.get("content", ""), f"m{start_idx + i}")
                 i += 1
 
         # Context dialog trigger — fetch only this one trace on click
